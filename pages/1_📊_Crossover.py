@@ -155,29 +155,45 @@ def main():
         forecast_years = st.slider(f"Wähle die Anzahl der Jahre für die Prognose", 1, 10, 3)
         crossover_fak1 = st.slider("Wähle den Crossover-Faktor(9/21)", 1, 10, 1)
         st.text(f'{crossover_fak1*9}/{crossover_fak1*21}')
-        # Aktie auswählen, entweder aus der Selectbox oder durch ein Klick-Event
-        #selected_stock_last = get_last_sentence(_conn)
-        default_index = 10
-        #default_index = int(all_stocks.index(selected_stock_last))
-        #st.write(default_index)
-        # Session State initialisieren
+        # Aktien-Suche: echtes Substring-Match (nicht Streamlits
+        # Fuzzy-Default). Sucht in Symbol UND Firmenname.
+        search_q = st.text_input(
+            "Aktie suchen (Symbol oder Firmenname — leer = alle)",
+            key="aktien_suche",
+            placeholder="z. B. AAPL oder Apple",
+        )
+
+        all_keys = list(stocks_dict.keys())
+        if search_q:
+            sq = search_q.strip().lower()
+            filtered_keys = [
+                k for k in all_keys
+                if sq in k.lower() or sq in (stocks_dict.get(k) or "").lower()
+            ]
+        else:
+            filtered_keys = all_keys
 
         if "selected_stock" not in st.session_state:
             st.session_state.selected_stock = None
 
-            default_index = list(stocks_dict.keys()).index(st.session_state.selected_stock) if st.session_state.selected_stock in stocks_dict else 0
+        if not filtered_keys:
+            st.warning(f"Keine Treffer für '{search_q}'.")
+            selected_stock = None
+        else:
+            # Default-Index: behalten falls aktuelle Auswahl noch in der
+            # gefilterten Liste ist, sonst auf 0 zuruecksetzen.
+            prev = st.session_state.get("selected_stock")
+            try:
+                default_index = filtered_keys.index(prev) if prev in filtered_keys else 0
+            except ValueError:
+                default_index = 0
 
-        #if st.session_state.selected_stock is None:
-        #st.session_state.selected_stock = selected_stock_last
-
-        selected_stock = st.selectbox(f"Wähle eine Aktie von {count_stocks} zur Analyse", 
-                            options=list(stocks_dict.keys()),     
-                            format_func = lambda x: f"{x} - {stocks_dict[x]}",
-                            index=default_index
-
-                            #index=list(stocks_dict.keys()).index(get_last_sentence(_conn))
-                            
-                            ) 
+            selected_stock = st.selectbox(
+                f"Aktie wählen ({len(filtered_keys)} von {count_stocks})",
+                options=filtered_keys,
+                format_func=lambda x: f"{x} - {stocks_dict[x]}",
+                index=default_index,
+            )
         
         # Wenn eine Aktie ausgewählt ist, die Analyse direkt anzeigen
         # Speichern der Auswahl
