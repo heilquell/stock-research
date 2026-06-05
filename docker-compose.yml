@@ -1,0 +1,30 @@
+services:
+  research:
+    build: .
+    container_name: research-tool
+    restart: unless-stopped
+    volumes:
+      # SQLite-DB liegt persistent außerhalb des Containers
+      - /docker/research/data:/data
+    environment:
+      - STOCKS_DB=/data/stocks.db
+      - TZ=Europe/Vienna
+    networks:
+      - traefik-proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-proxy
+      # HTTPS-Router
+      - traefik.http.routers.research.rule=Host(`research.georgshost.eu`)
+      - traefik.http.routers.research.entrypoints=websecure
+      - traefik.http.routers.research.tls=true
+      - traefik.http.routers.research.tls.certresolver=letsencrypt
+      # Streamlit-Service auf Port 8501
+      - traefik.http.services.research.loadbalancer.server.port=8501
+      # WebSocket-Sticky-Session (wichtig für Streamlit!)
+      - traefik.http.services.research.loadbalancer.sticky.cookie=true
+      - traefik.http.services.research.loadbalancer.sticky.cookie.name=research_session
+
+networks:
+  traefik-proxy:
+    external: true

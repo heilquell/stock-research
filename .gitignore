@@ -1,0 +1,42 @@
+# Datenbank — wird beim ersten Container-Start automatisch via
+# init_db() angelegt (leere Tabellenstruktur). Echte Daten liegen
+# unter /docker/research/data/ und gehoeren NICHT ins Repo.
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.filepart
+
+# Streamlit-Geheimnisse (falls je benoetigt)
+.streamlit/secrets.toml
+
+# Python-Cruft
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+.coverage
+.tox/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Logs / Backups
+*.log
+*.bak
+worker.log
+
+# Generierte Docs (Quelle ist DOKU.md)
+DOKU.html
+DOKU.pdf

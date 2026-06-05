@@ -1,0 +1,30 @@
+# DB nicht ins Image packen — kommt via Volume-Mount
+stocks.db
+stocks.db.filepart
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Docs
+DOKU.html
+DOKU.pdf
+*.bak
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Git
+.git/
+.gitignore
