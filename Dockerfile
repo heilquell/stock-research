@@ -21,6 +21,10 @@ stan_dir = Path(prophet.__file__).parent / 'stan_model'; \
 shutil.rmtree(stan_dir / 'cmdstan-2.33.1', ignore_errors=True); \
 cmdstanpy.install_cmdstan(version='2.33.1', dir=str(stan_dir))"
 
+# Zusatz-Pakete nach dem cmdstan-Layer installieren — sonst muesste
+# cmdstan bei jeder requirements.txt-Aenderung neu kompiliert werden.
+RUN pip install --no-cache-dir streamlit-searchbox
+
 COPY . .
 
 # Volume-Mount-Pfad — wird via docker-compose gemounted

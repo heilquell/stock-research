@@ -155,45 +155,34 @@ def main():
         forecast_years = st.slider(f"Wähle die Anzahl der Jahre für die Prognose", 1, 10, 3)
         crossover_fak1 = st.slider("Wähle den Crossover-Faktor(9/21)", 1, 10, 1)
         st.text(f'{crossover_fak1*9}/{crossover_fak1*21}')
-        # Aktien-Suche: echtes Substring-Match (nicht Streamlits
-        # Fuzzy-Default). Sucht in Symbol UND Firmenname.
-        search_q = st.text_input(
-            "Aktie suchen (Symbol oder Firmenname — leer = alle)",
-            key="aktien_suche",
-            placeholder="z. B. AAPL oder Apple",
-        )
+        # Live-Suche mit echtem Substring-Match (Symbol UND Firmenname).
+        # streamlit-searchbox triggert die Filter-Funktion bei JEDEM
+        # Keystroke und zeigt die Treffer als Dropdown — anders als das
+        # native selectbox das Fuzzy-Matching macht und text_input das
+        # erst bei Enter aktualisiert.
+        from streamlit_searchbox import st_searchbox
 
-        all_keys = list(stocks_dict.keys())
-        if search_q:
-            sq = search_q.strip().lower()
-            filtered_keys = [
-                k for k in all_keys
-                if sq in k.lower() or sq in (stocks_dict.get(k) or "").lower()
-            ]
-        else:
-            filtered_keys = all_keys
+        def search_aktien(q: str) -> list[tuple[str, str]]:
+            ql = (q or "").strip().lower()
+            if not ql:
+                # Leere Suche: erste 50 alphabetisch
+                items = list(stocks_dict.items())[:50]
+            else:
+                items = [
+                    (sym, name) for sym, name in stocks_dict.items()
+                    if ql in sym.lower() or ql in (name or "").lower()
+                ][:50]
+            return [(f"{sym} — {name}", sym) for sym, name in items]
 
         if "selected_stock" not in st.session_state:
             st.session_state.selected_stock = None
 
-        if not filtered_keys:
-            st.warning(f"Keine Treffer für '{search_q}'.")
-            selected_stock = None
-        else:
-            # Default-Index: behalten falls aktuelle Auswahl noch in der
-            # gefilterten Liste ist, sonst auf 0 zuruecksetzen.
-            prev = st.session_state.get("selected_stock")
-            try:
-                default_index = filtered_keys.index(prev) if prev in filtered_keys else 0
-            except ValueError:
-                default_index = 0
-
-            selected_stock = st.selectbox(
-                f"Aktie wählen ({len(filtered_keys)} von {count_stocks})",
-                options=filtered_keys,
-                format_func=lambda x: f"{x} - {stocks_dict[x]}",
-                index=default_index,
-            )
+        selected_stock = st_searchbox(
+            search_aktien,
+            placeholder=f"Aktie suchen ({count_stocks} verfügbar) — Symbol oder Firmenname",
+            key="aktien_searchbox",
+            default=st.session_state.get("selected_stock"),
+        )
         
         # Wenn eine Aktie ausgewählt ist, die Analyse direkt anzeigen
         # Speichern der Auswahl
