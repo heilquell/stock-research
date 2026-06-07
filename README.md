@@ -1,6 +1,6 @@
 # Stock Crossover Research-Tool
 
-Streamlit-Tool für technische Analyse von ~3.500 Wertpapieren — 9/21-MA-Crossover-Signale, Prophet-Forecast, Fundamental-Screener, Favoritenlisten.
+Streamlit-Tool für technische Analyse von (~3.500 des Autors) Wertpapieren — 9/21-MA-Crossover-Signale, Prophet-Forecast, Fundamental-Screener, Favoritenlisten.
 
 **Live:** https://research.georgshost.eu
 
