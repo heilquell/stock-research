@@ -3,6 +3,8 @@ import sqlite3
 import os
 from datetime import datetime
 
+from auth import user_email
+
 st.set_page_config(
     page_title="Stock Crossover Database",
     page_icon="📊",
@@ -13,7 +15,14 @@ DB_PATH = os.environ.get("STOCKS_DB", "/data/stocks.db")
 
 
 @st.cache_data(ttl=300)
-def overview_stats():
+def overview_stats(user: str | None = None):
+    """Kennzahlen der Startseite.
+
+    ``user`` bewusst OHNE fuehrenden Unterstrich: Streamlit nimmt
+    unterstrich-praefixierte Argumente NICHT in den Cache-Schluessel auf.
+    Mit ``_user`` bekamen alle Aufrufer das Ergebnis des ersten Aufrufs —
+    also den Favoriten-Zaehler des zuerst eingetroffenen Nutzers.
+    """
     """Liest grundlegende Status-Werte aus der DB. Defensiv: falls DB
     fehlt/leer/Tabellen nicht da → leeres Dict zurück."""
     if not os.path.exists(DB_PATH):
@@ -28,10 +37,23 @@ def overview_stats():
             except Exception:
                 return None
 
+        def _favs_des_nutzers(cursor, user):
+            if not user:
+                return None          # nicht angemeldet -> "—"
+            try:
+                return cursor.execute(
+                    "SELECT COUNT(*) FROM fav_list "
+                    "  JOIN fav_names ON fav_names.ID = fav_list.ID_fav "
+                    " WHERE fav_names.user_email = ?", (user,)).fetchone()[0]
+            except Exception:
+                return None
+
         stats = {
             "n_stocks": safe_count("SELECT COUNT(DISTINCT symbol) FROM stock_list"),
             "n_data_rows": safe_count("SELECT COUNT(*) FROM stock_data"),
-            "n_favs": safe_count("SELECT COUNT(*) FROM fav_list"),
+            # Favoriten sind seit dem Login nutzerbezogen -- die globale
+            # Summe waere fuer jeden ausser dem Eigentuemer schlicht falsch.
+            "n_favs": _favs_des_nutzers(cur, user),
             "last_date": None,
             "db_size_mb": round(os.path.getsize(DB_PATH) / (1024 * 1024), 1),
         }
@@ -49,7 +71,8 @@ def overview_stats():
 st.title("📊 Stock Crossover Database")
 st.write("Technische Analyse mit 9/21-Crossover, Prophet-Forecasts und Fundamental-Screener.")
 
-stats = overview_stats()
+_user = user_email()
+stats = overview_stats(_user)
 
 if stats is None:
     st.error(
@@ -62,7 +85,10 @@ else:
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Aktien", f"{stats['n_stocks']:,}" if stats["n_stocks"] is not None else "—")
     col2.metric("Kurs-Datensätze", f"{stats['n_data_rows']:,}" if stats["n_data_rows"] is not None else "—")
-    col3.metric("Favoriten", stats["n_favs"] if stats["n_favs"] is not None else "—")
+    col3.metric("Meine Favoriten",
+                stats["n_favs"] if stats["n_favs"] is not None else "—",
+                help=("Favoriten des angemeldeten Kontos. Ohne Anmeldung "
+                      "steht hier '—'."))
     col4.metric("DB-Größe", f"{stats['db_size_mb']} MB")
 
     if stats["last_date"]:
