@@ -6,6 +6,10 @@ services:
     volumes:
       # SQLite-DB liegt persistent außerhalb des Containers
       - /docker/research/data:/data
+    env_file:
+      # Google-OAuth-Zugangsdaten + Admin-Adresse. Datei ist untracked --
+      # ohne sie laeuft die App im Lesemodus (keine Schreibrechte).
+      - .env
     environment:
       - STOCKS_DB=/data/stocks.db
       - TZ=Europe/Vienna

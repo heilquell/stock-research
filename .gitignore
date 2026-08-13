@@ -8,7 +8,12 @@ data/
 *.db-shm
 *.filepart
 
-# Streamlit-Geheimnisse (falls je benoetigt)
+# Geheimnisse — NIEMALS ins Repo (oeffentlich!).
+# .env traegt seit 13.08.2026 die Google-OAuth-Zugangsdaten; entrypoint.sh
+# erzeugt daraus zur Laufzeit die secrets.toml.
+.env
+.env.*
+!.env.example
 .streamlit/secrets.toml
 
 # Python-Cruft

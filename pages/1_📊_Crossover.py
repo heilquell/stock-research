@@ -1,4 +1,6 @@
 import streamlit as st
+from auth import (MAX_NEUE_TITEL_PRO_MAL, darf_hinzufuegen,
+                  darf_loeschen, sidebar_login)
 import pandas as pd
 import streamlit.components.v1 as components
 
@@ -71,6 +73,13 @@ def main():
     # Datenbank initialisieren
     _conn = init_db()
 
+    # Anmeldung ganz oben in der Sidebar. Ohne Google-Zugangsdaten laeuft
+    # die App im Lesemodus (s. auth.py).
+    _user = sidebar_login()
+    if _user:
+        eigene_listen_anlegen(_conn, _user)
+    st.sidebar.divider()
+
     # Session-State für ausgewählte Aktie initialisieren
     if 'selected_stock' not in st.session_state:
         st.session_state['selected_stock'] = None
@@ -95,12 +104,25 @@ def main():
     
 
     st.sidebar.header("Neue Aktien hinzufügen")
-    new_stocks = st.sidebar.text_area("Gib neue Aktiensymbole ein (komma-getrennt)", "")
+    if not darf_hinzufuegen():
+        st.sidebar.caption("Zum Hinzufügen bitte anmelden.")
+    new_stocks = st.sidebar.text_area("Gib neue Aktiensymbole ein (komma-getrennt)", "",
+                                      disabled=not darf_hinzufuegen())
 
-    if st.sidebar.button("Aktien hinzufügen"):
+    if darf_hinzufuegen() and st.sidebar.button("Aktien hinzufügen"):
         chars_to_remove = ['"', '{', '}', '[', ']']
         new_stocks = remove_chars(new_stocks, chars_to_remove)
         new_stock_list = [s.strip().upper() for s in new_stocks.split(',') if s.strip()]
+        # Deckel: das Universum ist geteilt und der naechtliche Cron arbeitet
+        # es ab — ohne Grenze koennte ein Nutzer den Lauf beliebig verlaengern.
+        if len(new_stock_list) > MAX_NEUE_TITEL_PRO_MAL:
+            st.sidebar.error(
+                f"Maximal {MAX_NEUE_TITEL_PRO_MAL} Symbole auf einmal "
+                f"({len(new_stock_list)} eingegeben).")
+            st.stop()
+        if not new_stock_list:
+            st.sidebar.warning("Keine gültigen Aktiensymbole eingegeben.")
+            st.stop()
         new_stock_list_last = new_stock_list[-1]
         store_sentences(_conn, new_stock_list_last)
         if new_stock_list:
@@ -118,7 +140,7 @@ def main():
         else:
             st.sidebar.warning("Keine gültigen Aktiensymbole eingegeben.")
     
-    if st.sidebar.button("Aktien löschen"):
+    if darf_loeschen() and st.sidebar.button("Aktien löschen"):
         if not st.session_state.confirm_delete:
             st.session_state.confirm_delete = True
             st.sidebar.warning("Bist du sicher, dass du alle Aktien löschen möchtest? Klicke erneut, um zu bestätigen.")
@@ -195,29 +217,31 @@ def main():
 
         #if st.button("Analyse starten"):
             # stock in senteces speichern als history
-            df = find_fav(_conn, selected_stock)
-            if df.empty:
-                listfav = get_fav_lists(_conn)
-                #st.write('keine Favoriten')
-                f_col1, f_col2 = st.columns(2)
-                with f_col1:
-                    selected_favlist = st.selectbox(f"Favoritenlisten",  
-                            options=listfav)
-                with f_col2:
-                    button_placeholder = st.empty()
-                    button = button_placeholder.button("Zu Favoriten hinzufügen")
-                    if button:
-                        #st.write('selected_favlist', selected_favlist)
-                        add_fav(_conn, selected_favlist, selected_stock)
-                        st.success(f"{selected_stock} wurde zu den Favoriten hinzugefügt!")
-                        button_placeholder.empty()
+            # Favoriten haengen am angemeldeten Nutzer — ohne Anmeldung
+            # gibt es nichts zu sehen und nichts zu aendern.
+            if not _user:
+                st.caption("🔒 Für eigene Favoriten bitte links mit Google anmelden.")
             else:
-                f_col1, f_col2 = st.columns(2)
-                with f_col1:
-                    st.write(df['listname'][0])
-                with f_col2:
-                    if st.button(f"von Favoriten entfernen"):
-                            del_fav(_conn,  selected_stock)
+                df = find_fav(_conn, selected_stock, _user)
+                if df.empty:
+                    listfav = get_fav_lists(_conn, _user)
+                    f_col1, f_col2 = st.columns(2)
+                    with f_col1:
+                        selected_favlist = st.selectbox("Favoritenlisten",
+                                options=listfav)
+                    with f_col2:
+                        button_placeholder = st.empty()
+                        if button_placeholder.button("Zu Favoriten hinzufügen"):
+                            add_fav(_conn, selected_favlist, selected_stock, _user)
+                            st.success(f"{selected_stock} wurde zu den Favoriten hinzugefügt!")
+                            button_placeholder.empty()
+                else:
+                    f_col1, f_col2 = st.columns(2)
+                    with f_col1:
+                        st.write(df['listname'][0])
+                    with f_col2:
+                        if st.button("von Favoriten entfernen"):
+                            del_fav(_conn, selected_stock, _user)
                             st.success(f"{selected_stock} wurde von den Favoriten entfernt!")
                             st.rerun()
         

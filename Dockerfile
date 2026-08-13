@@ -23,7 +23,13 @@ cmdstanpy.install_cmdstan(version='2.33.1', dir=str(stan_dir))"
 
 # Zusatz-Pakete nach dem cmdstan-Layer installieren — sonst muesste
 # cmdstan bei jeder requirements.txt-Aenderung neu kompiliert werden.
-RUN pip install --no-cache-dir streamlit-searchbox
+# streamlit[auth]: Streamlits eingebautes OIDC laedt seine Abhaengigkeiten
+# erst beim Aufruf von st.login nach — der Start laeuft ohne sie sauber durch
+# und die Anmeldung stirbt dann mit 500. Authlib allein reicht NICHT: dessen
+# starlette-Integration zieht httpx nach. Deshalb das komplette Extra statt
+# einzelner Pakete. Versions-Constraint wie in requirements.txt, damit hier
+# kein Streamlit-Upgrade durch die Hintertuer passiert.
+RUN pip install --no-cache-dir streamlit-searchbox "streamlit[auth]>=1.40,<2.0"
 
 COPY . .
 
@@ -35,4 +41,7 @@ EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl --fail http://localhost:8501/_stcore/health || exit 1
 
-CMD ["streamlit", "run", "main.py"]
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+CMD ["/entrypoint.sh"]

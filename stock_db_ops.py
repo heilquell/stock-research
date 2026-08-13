@@ -26,6 +26,13 @@ def init_db(db_name=None):
     _conn = sqlite3.connect(db_name, timeout=10)
     cursor = _conn.cursor()
 
+    # WAL VOR allem anderen: der PRAGMA greift nicht innerhalb einer offenen
+    # Transaktion und meldet dann still den alten Modus zurueck. Ohne WAL
+    # sperrt jeder Schreibvorgang alle Leser -- bei einem Nutzer egal, ab
+    # dem Login nicht mehr.
+    _conn.commit()
+    cursor.execute("PRAGMA journal_mode=WAL")
+
     # tabelle "sentences" mit den spalten "id" und "sentence" erzeugen
     cursor.execute('''
         create table if not exists sentences (
@@ -48,6 +55,20 @@ def init_db(db_name=None):
     symbol TEXT NOT NULL,
     created_at DATETIME DEFAULT NULL
     )   ''')
+
+    # Migration 13.08.2026: Favoriten gehoeren ab jetzt einem Nutzer.
+    # ALTER TABLE ohne IF NOT EXISTS -> Spalten-Check vorab.
+    spalten = {r[1] for r in cursor.execute("PRAGMA table_info(fav_names)")}
+    if "user_email" not in spalten:
+        cursor.execute("ALTER TABLE fav_names ADD COLUMN user_email TEXT")
+        # Bestandslisten dem Admin zuordnen — sie sind Georgs.
+        admin = (os.environ.get("ADMIN_EMAIL") or "").strip().lower()
+        if admin:
+            cursor.execute(
+                "UPDATE fav_names SET user_email = ? WHERE user_email IS NULL",
+                (admin,))
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fav_names_user "
+                   "ON fav_names(user_email)")
 
     cursor.execute(""" 
     CREATE TRIGGER if not exists set_created_at_fav
@@ -865,34 +886,79 @@ def get_stocks_4infoupdate(_conn):
     #st.write(stocks)
     return stocks
 
-def find_fav(_conn, symbol):
-    query = "SELECT fav_list.symbol, fav_names.symbol as listname from fav_list LEFT JOIN fav_names ON fav_names.ID = fav_list.ID_fav where fav_list.symbol = ?"
-    df = pd.read_sql(query, _conn, params=(symbol,))
-    return df
+def find_fav(_conn, symbol, user: str | None = None):
+    """In welchen Listen DIESES Nutzers liegt der Titel? Ohne Nutzer leer."""
+    if not user:
+        return pd.DataFrame(columns=["symbol", "listname"])
+    query = ("SELECT fav_list.symbol, fav_names.symbol AS listname "
+             "  FROM fav_list "
+             "  JOIN fav_names ON fav_names.ID = fav_list.ID_fav "
+             " WHERE fav_list.symbol = ? AND fav_names.user_email = ?")
+    return pd.read_sql(query, _conn, params=(symbol, user))
 
-def get_fav_lists(_conn):
-    query = "SELECT symbol from fav_names  "
-    df = pd.read_sql(query, _conn)
+# --- Favoriten: seit 13.08.2026 je Nutzer -------------------------------
+# fav_names.user_email traegt den Eigentuemer. Alle Zugriffe laufen ueber
+# diese Spalte, damit sich zwei Nutzer nicht gegenseitig die Listen
+# umschreiben. Ohne Anmeldung (user=None) ist alles schreibgeschuetzt.
+STANDARD_LISTEN = ("Liste 1", "Eigene Aktien", "Eigene Optionen")
+
+
+def eigene_listen_anlegen(_conn, user: str) -> None:
+    """Legt fuer einen neuen Nutzer die Standard-Listen an (idempotent)."""
+    if not user:
+        return
+    cur = _conn.cursor()
+    vorhanden = {r[0] for r in cur.execute(
+        "SELECT symbol FROM fav_names WHERE user_email = ?", (user,))}
+    for name in STANDARD_LISTEN:
+        if name not in vorhanden:
+            cur.execute(
+                "INSERT INTO fav_names (symbol, user_email) VALUES (?, ?)",
+                (name, user))
+    _conn.commit()
+
+
+def get_fav_lists(_conn, user: str | None = None):
+    """Favoritenlisten des Nutzers. Ohne Nutzer: keine (Lesemodus)."""
+    if not user:
+        return None
+    df = pd.read_sql(
+        "SELECT symbol FROM fav_names WHERE user_email = ? ORDER BY ID",
+        _conn, params=(user,))
+    return list(df["symbol"]) if not df.empty else None
+
+
+def add_fav(_conn, sel_list, selected_stock, user: str | None = None):
+    if not user:
+        return False
+    df = pd.read_sql(
+        "SELECT ID FROM fav_names WHERE symbol = ? AND user_email = ?",
+        _conn, params=(sel_list, user))
     if df.empty:
-        result = None
-    else:
-        liste = list(df["symbol"])
-        result = liste        
-    return result
-
-def add_fav(_conn, sel_list, selected_stock):
-    #query = f"SELECT fav_names.ID from fav_names LEFT JOIN fav_list ON fav_names.ID = fav_list.ID_fav where fav_names.symbol = '{sel_list}' and fav_list.symbol = '{selected_stock}'"
-    query = "SELECT ID, symbol as listname from fav_names where symbol = ?"
-    df = pd.read_sql(query, _conn, params=(sel_list,))
-    id = int(df['ID'])
+        return False
     cursor = _conn.cursor()
-    cursor.execute('INSERT OR REPLACE INTO fav_list (ID_fav, symbol) VALUES (?, ?)', (id, selected_stock))
-    _conn.commit() 
+    cursor.execute(
+        "INSERT OR REPLACE INTO fav_list (ID_fav, symbol) VALUES (?, ?)",
+        (int(df["ID"].iloc[0]), selected_stock))
+    _conn.commit()
+    return True
 
-def del_fav(_conn, selected_stock):
+
+def del_fav(_conn, selected_stock, user: str | None = None):
+    """Entfernt den Titel NUR aus den Listen dieses Nutzers.
+
+    Vorher loeschte die Funktion nach Symbol allein — mit mehreren Nutzern
+    haette das fremde Favoriten mitgerissen.
+    """
+    if not user:
+        return False
     cursor = _conn.cursor()
-    cursor.execute('DELETE FROM fav_list WHERE symbol = ?', (selected_stock,))
-    _conn.commit() 
+    cursor.execute(
+        "DELETE FROM fav_list WHERE symbol = ? AND ID_fav IN "
+        "  (SELECT ID FROM fav_names WHERE user_email = ?)",
+        (selected_stock, user))
+    _conn.commit()
+    return True
 
 
 
