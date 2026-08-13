@@ -23,13 +23,10 @@ cmdstanpy.install_cmdstan(version='2.33.1', dir=str(stan_dir))"
 
 # Zusatz-Pakete nach dem cmdstan-Layer installieren — sonst muesste
 # cmdstan bei jeder requirements.txt-Aenderung neu kompiliert werden.
-# streamlit[auth]: Streamlits eingebautes OIDC laedt seine Abhaengigkeiten
-# erst beim Aufruf von st.login nach — der Start laeuft ohne sie sauber durch
-# und die Anmeldung stirbt dann mit 500. Authlib allein reicht NICHT: dessen
-# starlette-Integration zieht httpx nach. Deshalb das komplette Extra statt
-# einzelner Pakete. Versions-Constraint wie in requirements.txt, damit hier
-# kein Streamlit-Upgrade durch die Hintertuer passiert.
-RUN pip install --no-cache-dir streamlit-searchbox "streamlit[auth]>=1.40,<2.0"
+# Zusatz-Pakete nach dem cmdstan-Layer. Streamlit steht hier bewusst NICHT
+# mehr: Version und Extras kommen ausschliesslich aus requirements.txt, sonst
+# gaebe es zwei Stellen, an denen die Version auseinanderlaufen kann.
+RUN pip install --no-cache-dir streamlit-searchbox
 
 COPY . .
 
