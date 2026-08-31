@@ -143,64 +143,100 @@ tab_roll, tab_preis, tab_kette, tab_iv = st.tabs(
 # ---------------------------------------------------------------------------
 with tab_roll:
     st.subheader("Wie weit muss ich verlängern, damit der Credit stimmt?")
-    r1, r2, r3, r4 = st.columns(4)
+
+    # Verfallstermine sind keine Regelmaessigkeit, sondern eine Liste.
+    # Nachgemessen am 31.08.2026: ADBE hat woechentliche Freitage bis 16.10.,
+    # danach springt es auf 20.11. und 18.12. — jeder erzeugte Freitag
+    # dazwischen existiert nicht. INTC hat umgekehrt Termine am Montag und
+    # Mittwoch, die ein Freitagsraster gar nicht erst anbietet. Deshalb
+    # dieselbe Rangfolge wie bei den Strikes: ablesen schlaegt erzeugen.
+    modus_v = st.radio("Verfallstermine",
+                       ["echte aus der Optionskette", "jeder Freitag (ohne Netz)"],
+                       horizontal=True, key="roll_modus")
+
+    r1, r2, r3 = st.columns(3)
     with r1:
         typ = st.radio("Typ", ["put", "call"], horizontal=True, key="roll_typ")
     with r2:
         vorschlag_alt = od.naechster_strike(
             S, ABSTAND_PUT_PCT if typ == "put" else ABSTAND_CALL_PCT, sym)
         k_alt = st.number_input("Strike der offenen Position", value=float(vorschlag_alt),
-                                step=1.0, format="%.2f", key="roll_kalt")
+                                step=1.0, format="%.2f", key=f"roll_kalt_{sym}")
     with r3:
-        verfall_alt = st.date_input("Verfall der offenen Position",
-                                    value=od.naechste_freitage(1)[0], key="roll_valt")
-    with r4:
         k_neu = st.number_input("Neuer Strike", value=float(vorschlag_alt),
-                                step=1.0, format="%.2f", key="roll_kneu",
+                                step=1.0, format="%.2f", key=f"roll_kneu_{sym}",
                                 help="Gleicher Strike = reines Zeitrollen. Tiefer "
                                      "(Put) heißt defensiver, dafür weniger Prämie.")
 
-    r5, r6 = st.columns(2)
-    with r5:
-        min_credit = st.number_input("Mindest-Credit je Kontrakt", value=0.0, step=0.05,
-                                     format="%.2f", key="roll_credit")
-    with r6:
-        wochen = st.slider("Wochen prüfen", 4, 52, 12, key="roll_wochen")
+    kandidaten: list[date] = []
+    verfall_alt = None
 
-    # Mitternacht statt datetime.now(): die Bibliothek rechnet Laufzeiten als
-    # Differenz zweier Zeitpunkte und schneidet auf ganze Tage ab. Mit der
-    # Uhrzeit von jetzt waere ein Freitag in vier Tagen je nach Tageszeit mal
-    # vier und mal drei Tage entfernt — der Preis schwankte dann mit dem
-    # Aufrufzeitpunkt statt mit dem Markt.
-    heute = datetime.combine(date.today(), datetime.min.time())
+    if modus_v.startswith("echte"):
+        schluessel_v = f"roll_dates_{sym}"
+        if st.button("Verfallstermine laden", key="roll_load"):
+            st.session_state[schluessel_v] = od.yahoo_verfallsdaten(sym)
+        termine = [date.fromisoformat(t) for t in st.session_state.get(schluessel_v, [])]
+        if not termine:
+            st.info("Termine laden — dann steht hier die echte Liste des Titels, "
+                    "einschließlich der Montags- und Mittwochs-Verfälle, die es "
+                    "bei manchen Werten gibt.")
+        else:
+            v1, v2 = st.columns([2, 1])
+            with v1:
+                verfall_alt = st.selectbox(
+                    "Verfall der offenen Position", termine, key="roll_valt_y",
+                    format_func=lambda d: (
+                        f"{d:%d.%m.%Y (%a)} · "
+                        f"{od.tage_bis(d, date.today(), mitzaehlen)} "
+                        + ("Tag" if od.tage_bis(d, date.today(), mitzaehlen) == 1
+                           else "Tage")))
+            with v2:
+                anzahl = st.slider("Termine prüfen", 1, 20, 8, key="roll_anz")
+            kandidaten = [t for t in termine if t > verfall_alt][:anzahl]
+    else:
+        v1, v2 = st.columns([2, 1])
+        with v1:
+            verfall_alt = st.date_input("Verfall der offenen Position",
+                                        value=od.naechste_freitage(1)[0], key="roll_valt")
+        with v2:
+            wochen = st.slider("Wochen prüfen", 4, 52, 12, key="roll_wochen")
+        kandidaten = [f for f in od.naechste_freitage(wochen + 8)
+                      if f > verfall_alt][:wochen]
+        st.caption("Erzeugte Freitage — nicht jeder davon wird als Kontrakt "
+                   "gehandelt. Sicher ist nur die echte Terminliste.")
+
+    min_credit = st.number_input("Mindest-Credit je Kontrakt", value=0.0, step=0.05,
+                                 format="%.2f", key="roll_credit")
+
+    if verfall_alt is None:
+        st.stop()
+
     rest_alt = od.tage_bis(verfall_alt, date.today(), mitzaehlen)
     if rest_alt <= 0:
         st.warning("Der Verfall liegt nicht in der Zukunft.")
+    elif not kandidaten:
+        st.warning("Keine Termine nach dem aktuellen Verfall — mehr Termine prüfen.")
     else:
-        beste, protokoll, alle = op.finde_rolling_laufzeit_mit_datum(
-            aktienkurs=S, alter_strike=k_alt, neuer_strike=k_neu,
-            aktuelles_datum=heute,
-            aktuelles_verfalldatum=datetime.combine(verfall_alt, datetime.min.time()),
-            option_type=typ, min_credit=min_credit, r=r, sigma=sigma,
-            max_wochen=wochen, n=N_TABELLE, details=True,
-            tage_offset=1 if mitzaehlen else 0)
+        # Der Rueckkaufpreis und jeder Kandidatenpreis kommen aus derselben
+        # Funktion mit derselben Tageszaehlung. Der Credit ist die Differenz —
+        # nur so kann zwischen Tabelle und Satz darunter nichts auseinanderlaufen.
+        rueckkauf = preis(S, k_alt, rest_alt / 365, r, sigma, N_TABELLE, typ)
+        itm = max(k_alt - S, 0) if typ == "put" else max(S - k_alt, 0)
 
-        # Rueckkaufpreis NICHT daneben neu rechnen, sondern aus der Bibliothek
-        # ableiten: Credit = neuer Preis - alter Preis. So kann in der Tabelle
-        # und im Satz darunter nichts auseinanderlaufen.
-        rueckkauf = (alle[0]["neuer_preis"] - alle[0]["credit"]) if alle else 0.0
+        st.markdown(
+            f"**Offene Position:** {typ.upper()} {eur(k_alt)} · Verfall "
+            f"**{verfall_alt:%d.%m.%Y (%a)}** · noch "
+            f"**{rest_alt} {'Tag' if rest_alt == 1 else 'Tage'}** · "
+            f"Rückkauf {eur(rueckkauf)}"
+            + (f" · **{eur(itm)} im Geld**" if itm else ""))
 
-        # Die Bibliothek prueft alle kommenden Freitage — auch den, an dem die
-        # Position ohnehin verfaellt. Auf denselben Tag zu rollen ist kein
-        # Rollen, sondern ein Nullgeschaeft: gleicher Strike, gleicher Verfall,
-        # Credit exakt 0,00. Als "erster positiver Credit" waere das eine
-        # Antwort, die nach einer Empfehlung aussieht und keine ist.
-        alle = [e for e in alle if e["verfalldatum"].date() > verfall_alt]
-        beste = next((e for e in alle if e["credit"] >= min_credit), None)
-        if not alle:
-            st.warning("Keine Verfallstermine nach dem aktuellen — Wochen erhöhen.")
-            st.stop()
-        itm = (max(k_alt - S, 0) if typ == "put" else max(S - k_alt, 0))
+        reihen = []
+        for t in kandidaten:
+            tage = od.tage_bis(t, date.today(), mitzaehlen)
+            p = preis(S, k_neu, tage / 365, r, sigma, N_TABELLE, typ)
+            reihen.append({"Verfall": t, "Tage": tage, "Neuer Preis": round(p, 2),
+                           "Credit": round(p - rueckkauf, 2)})
+        beste = next((z for z in reihen if z["Credit"] >= min_credit), None)
 
         m1, m2, m3 = st.columns(3)
         m1.metric("Rückkauf der alten Option", eur(rueckkauf),
@@ -208,27 +244,29 @@ with tab_roll:
         m2.metric("im Geld", eur(itm) if itm else "—",
                   delta="Position im Verlust" if itm else None, delta_color="inverse")
         if beste:
-            m3.metric("erster positiver Credit",
-                      f"Woche {beste['wochen']} · {eur(beste['credit'])}",
-                      help=beste["verfalldatum"].strftime("Verfall %d.%m.%Y"))
+            m3.metric("erster ausreichender Credit",
+                      f"{beste['Verfall']:%d.%m.} · {eur(beste['Credit'])}",
+                      help=f"{beste['Tage'] - rest_alt} Tage länger als jetzt")
         else:
-            m3.metric("erster positiver Credit", "keiner",
-                      help=f"auch nach {wochen} Wochen nicht")
+            m3.metric("erster ausreichender Credit", "keiner",
+                      help="auch am spätesten geprüften Termin nicht")
 
         df = pd.DataFrame([{
-            "Woche": e["wochen"],
-            "Verfall": e["verfalldatum"].strftime("%Y-%m-%d (%a)"),
-            "Tage": e["tage"],
-            "Neuer Preis": round(e["neuer_preis"], 2),
-            "Credit": round(e["credit"], 2),
-            "": "⭐" if beste and e["wochen"] == beste["wochen"] else
-                ("✓" if e["credit"] >= min_credit else ""),
-        } for e in alle])
+            "Verfall": f"{z['Verfall']:%Y-%m-%d (%a)}",
+            "Tage": z["Tage"],
+            "länger": z["Tage"] - rest_alt,
+            "Neuer Preis": z["Neuer Preis"],
+            "Credit": z["Credit"],
+            "": "⭐" if beste and z["Verfall"] == beste["Verfall"]
+                else ("✓" if z["Credit"] >= min_credit else ""),
+        } for z in reihen])
         st.dataframe(df, width='stretch', hide_index=True)
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df["Tage"], y=df["Credit"], mode="lines+markers",
-                                 name="Credit", line=dict(color="#0969da")))
+        fig.add_trace(go.Scatter(x=[z["Tage"] for z in reihen],
+                                 y=[z["Credit"] for z in reihen],
+                                 mode="lines+markers", name="Credit",
+                                 line=dict(color="#0969da")))
         fig.add_hline(y=min_credit, line_dash="dash", line_color="#cf222e",
                       annotation_text="Mindest-Credit")
         fig.update_layout(height=280, margin=dict(l=10, r=10, t=30, b=10),
@@ -237,8 +275,8 @@ with tab_roll:
 
         if beste:
             eff = op.check_roll_lohnt_sich(
-                preis_aktuell=rueckkauf, preis_neu=beste["neuer_preis"],
-                gebuehren=0.0, tage_rest_alt=rest_alt, tage_neu=beste["tage"])
+                preis_aktuell=rueckkauf, preis_neu=beste["Neuer Preis"],
+                gebuehren=0.0, tage_rest_alt=rest_alt, tage_neu=beste["Tage"])
             e1, e2, e3 = st.columns(3)
             e1.metric("Ertrag je Tag, halten", eur(eff["Ertrag/Tag Alt"]))
             e2.metric("Ertrag je Tag, gerollt", eur(eff["Ertrag/Tag Neu"]))
@@ -249,12 +287,24 @@ with tab_roll:
                 f"**Heute:** {typ.upper()} {eur(k_alt)} (Verfall "
                 f"{verfall_alt:%d.%m.%Y}) für {eur(rueckkauf)} zurückkaufen, "
                 f"{typ.upper()} {eur(k_neu)} mit Verfall "
-                f"{beste['verfalldatum']:%d.%m.%Y} für {eur(beste['neuer_preis'])} "
-                f"verkaufen → **Credit {eur(beste['credit'])}** je Kontrakt "
-                f"({eur(beste['credit'] * 100, 0)} bei Multiplikator 100)."
-            )
-        with st.expander("Rechenweg der Bibliothek"):
-            st.code(protokoll, language=None)
+                f"{beste['Verfall']:%d.%m.%Y} für {eur(beste['Neuer Preis'])} "
+                f"verkaufen → **Credit {eur(beste['Credit'])}** je Kontrakt "
+                f"({eur(beste['Credit'] * 100, 0)} bei Multiplikator 100).")
+
+        with st.expander("Rechenweg"):
+            st.code(
+                f"Kurs S            {eur(S)}\n"
+                f"Volatilität σ     {sigma * 100:.1f} %\n"
+                f"Zins r            {r * 100:.2f} %\n"
+                f"Verfalltag zählt  {'ja' if mitzaehlen else 'nein'}\n"
+                f"\n"
+                f"Rückkauf   {typ.upper()} {eur(k_alt)}, {rest_alt} Tage"
+                f"  →  {eur(rueckkauf)}\n"
+                + "".join(
+                    f"Verkauf    {typ.upper()} {eur(k_neu)}, {z['Tage']:>3} Tage"
+                    f"  →  {eur(z['Neuer Preis']):>8}   Credit {eur(z['Credit']):>8}\n"
+                    for z in reihen),
+                language=None)
 
 # ---------------------------------------------------------------------------
 # 2) Preis & Griechen
@@ -268,7 +318,7 @@ with tab_preis:
             "Strike",
             value=od.naechster_strike(
                 S, ABSTAND_PUT_PCT if typ_p == "put" else ABSTAND_CALL_PCT, sym),
-            step=1.0, format="%.2f", key="pr_k")
+            step=1.0, format="%.2f", key=f"pr_k_{sym}")
     with p3:
         verfall_p = st.date_input("Verfall", value=od.naechste_freitage(1)[0], key="pr_v")
 
@@ -444,7 +494,7 @@ with tab_iv:
         with i2:
             k_i = st.number_input(
                 "Strike", value=od.naechster_strike(S, ABSTAND_PUT_PCT, sym),
-                step=1.0, format="%.2f", key="iv_k")
+                step=1.0, format="%.2f", key=f"iv_k_{sym}")
         with i3:
             verfall_i = st.date_input("Verfall", value=od.naechste_freitage(1)[0],
                                       key="iv_v")
