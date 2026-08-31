@@ -208,11 +208,13 @@ with tab_roll:
     min_credit = st.number_input("Mindest-Credit je Kontrakt", value=0.0, step=0.05,
                                  format="%.2f", key="roll_credit")
 
+    # KEIN st.stop() an dieser Stelle: das beendet nicht den Reiter, sondern
+    # den ganzen Seitenaufbau — Preis, Kette und implizite Vola blieben leer,
+    # solange hier die Termine fehlten.
+    rest_alt = od.tage_bis(verfall_alt, date.today(), mitzaehlen) if verfall_alt else 0
     if verfall_alt is None:
-        st.stop()
-
-    rest_alt = od.tage_bis(verfall_alt, date.today(), mitzaehlen)
-    if rest_alt <= 0:
+        pass
+    elif rest_alt <= 0:
         st.warning("Der Verfall liegt nicht in der Zukunft.")
     elif not kandidaten:
         st.warning("Keine Termine nach dem aktuellen Verfall — mehr Termine prüfen.")
@@ -354,15 +356,55 @@ with tab_preis:
                              yaxis_title="Optionspreis")
             st.plotly_chart(f1, width='stretch')
         with g2:
-            ts = list(range(max(tage_p, 2), 0, -max(1, tage_p // 20)))
-            zs = [preis(S, k_p, t / 365, r, sigma, N_TABELLE, typ_p) - innerer for t in ts]
-            f2 = go.Figure(go.Scatter(x=ts, y=zs, mode="lines", name="Zeitwert",
-                                      line=dict(color="#1a7f37")))
-            f2.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
-                             title="Zeitwert über Restlaufzeit",
-                             xaxis_title="Tage bis Verfall", yaxis_title="Zeitwert",
-                             xaxis=dict(autorange="reversed"))
+            # Der Zeitwert faellt nicht gleichmaessig, sondern nach Wurzel der
+            # Restlaufzeit: am Geld verliert diese Option zwischen Tag 90 und 60
+            # rund 0,16 je Tag, zwischen Tag 2 und 1 aber 1,24 — Faktor sieben.
+            # Sichtbar wird das nur mit genug Stuetzstellen und ueber einen
+            # Horizont, der die Kruemmung enthaelt. Die erste Fassung zeichnete
+            # fuenf Punkte ueber fuenf Tage; das ergibt einen Streckenzug, der
+            # wie eine Gerade aussieht.
+            # Zwei Raster uebereinander: grob ueber den ganzen Horizont, fein
+            # ueber die letzten zehn Tage. Dort ist die Kruemmung am groessten,
+            # und ein gleichmaessiges Raster von 1,5 Tagen wuerde genau die
+            # Stelle glattbuegeln, um die es geht.
+            horizont = max(tage_p, 90)
+            grob = [horizont * i / 40 for i in range(40, 0, -1)]
+            fein = [i * 0.25 for i in range(40, 0, -1)]
+            ts = sorted({round(t, 3) for t in grob + fein if t > 0}, reverse=True)
+            zs = [preis(S, k_p, t / 365, r, sigma, N_TABELLE, typ_p) - innerer
+                  for t in ts]
+            # Verlust je Tag aus der Kurve selbst — das ist die Groesse, die
+            # den Satz "zum Schluss geht es schnell" belegt.
+            verlust = [None] + [(zs[i - 1] - zs[i]) / (ts[i - 1] - ts[i])
+                                for i in range(1, len(ts))]
+
+            f2 = go.Figure()
+            f2.add_trace(go.Scatter(x=ts, y=zs, mode="lines", name="Zeitwert",
+                                    line=dict(color="#1a7f37")))
+            f2.add_trace(go.Scatter(x=ts, y=verlust, mode="lines",
+                                    name="Verlust je Tag", yaxis="y2",
+                                    line=dict(color="#cf222e", dash="dot")))
+            f2.add_vline(x=tage_p, line_dash="dash", line_color="#57606a",
+                         annotation_text=f"heute · {tage_p} T")
+            f2.update_layout(
+                height=300, margin=dict(l=10, r=10, t=30, b=10),
+                title="Zeitwert über Restlaufzeit",
+                xaxis=dict(title="Tage bis Verfall", autorange="reversed"),
+                yaxis=dict(title="Zeitwert"),
+                yaxis2=dict(title="Verlust je Tag", overlaying="y", side="right",
+                            showgrid=False),
+                legend=dict(orientation="h", y=1.12, x=0))
             st.plotly_chart(f2, width='stretch')
+            hoehepunkt = (max(range(1, len(ts)), key=lambda i: verlust[i])
+                          if len(ts) > 2 else 0)
+            st.caption(
+                "Kurs und Volatilität sind festgehalten, nur die Restlaufzeit "
+                "läuft — eine Verfallskurve, keine Prognose. Die gepunktete "
+                "Linie ist der Verlust je Tag. Am Geld steigt er bis zuletzt; "
+                "aus dem Geld hat er einen Höhepunkt und fällt danach, weil "
+                "immer weniger übrig ist, das noch verfallen könnte — hier "
+                f"bei {ts[hoehepunkt]:.2f} Tagen mit "
+                f"{eur(verlust[hoehepunkt])} je Tag.")
 
 # ---------------------------------------------------------------------------
 # 3) Optionskette
