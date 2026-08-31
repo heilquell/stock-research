@@ -147,8 +147,8 @@ with tab_roll:
     with r1:
         typ = st.radio("Typ", ["put", "call"], horizontal=True, key="roll_typ")
     with r2:
-        vorschlag_alt = op.find_next_strike_dyn(
-            S, S * (ABSTAND_PUT_PCT if typ == "put" else ABSTAND_CALL_PCT) / 100)
+        vorschlag_alt = od.naechster_strike(
+            S, ABSTAND_PUT_PCT if typ == "put" else ABSTAND_CALL_PCT, sym)
         k_alt = st.number_input("Strike der offenen Position", value=float(vorschlag_alt),
                                 step=1.0, format="%.2f", key="roll_kalt")
     with r3:
@@ -265,8 +265,9 @@ with tab_preis:
         typ_p = st.radio("Typ", ["put", "call"], horizontal=True, key="pr_typ")
     with p2:
         k_p = st.number_input(
-            "Strike", value=float(op.find_next_strike_dyn(
-                S, S * (ABSTAND_PUT_PCT if typ_p == "put" else ABSTAND_CALL_PCT) / 100)),
+            "Strike",
+            value=od.naechster_strike(
+                S, ABSTAND_PUT_PCT if typ_p == "put" else ABSTAND_CALL_PCT, sym),
             step=1.0, format="%.2f", key="pr_k")
     with p3:
         verfall_p = st.date_input("Verfall", value=od.naechste_freitage(1)[0], key="pr_v")
@@ -317,41 +318,114 @@ with tab_preis:
 # 3) Optionskette
 # ---------------------------------------------------------------------------
 with tab_kette:
-    st.caption("Strike-Leiter über mehrere Verfallswochen, Put und Call nebeneinander. "
-               f"Gerechnet mit n = {N_TABELLE} — der Unterschied zu n = {N_EINZEL} "
-               "liegt unter einem Zehntelprozent, die Rechenzeit beim Sechsfachen.")
-    q1, q2, q3 = st.columns(3)
-    with q1:
-        spanne = st.slider("Strikes ± % um den Kurs", 2, 25, 8, key="ke_span")
-    with q2:
-        n_wochen = st.slider("Verfallswochen", 1, 8, 4, key="ke_wochen")
-    with q3:
-        # Vorgabe wie an der Boerse ueblich: je hoeher der Kurs, desto weiter
-        # die Strikes auseinander (dieselbe Staffel wie find_next_strike_dyn).
-        vorgabe = 2.5 if S < 50 else 5.0 if S < 200 else 10.0
-        schritt = st.select_slider("Strike-Schritt", [1.0, 2.5, 5.0, 10.0, 20.0],
-                                   value=vorgabe, key="ke_schritt")
+    schritt_db, herkunft = od.strike_schritt(sym, S)
+    st.caption(
+        f"Strike-Raster für **{sym}**: {eur(schritt_db)} — {herkunft}. "
+        f"Gerechnet mit n = {N_TABELLE}; der Unterschied zu n = {N_EINZEL} liegt "
+        "unter einem Zehntelprozent, die Rechenzeit beim Sechsfachen.")
 
-    if st.button("Kette berechnen", type="primary", key="ke_go"):
-        strikes = op.find_strike_range(S, -S * spanne / 100, S * spanne / 100, schritt)
-        freitage = od.naechste_freitage(n_wochen)
-        with st.spinner(f"{len(strikes) * len(freitage) * 2} Optionen …"):
-            for fr in freitage:
-                tage = od.tage_bis(fr, date.today(), mitzaehlen)
-                T = tage / 365
-                zeilen = []
-                for k in strikes:
-                    gc = griechen(S, k, T, r, sigma, N_TABELLE, "call")
-                    gp = griechen(S, k, T, r, sigma, N_TABELLE, "put")
-                    zeilen.append({
-                        "Call Δ": gc["Delta"], "Call Θ": gc["Theta(tgl)"],
-                        "Call": gc["Preis"], "Strike": k, "Put": gp["Preis"],
-                        "Put Δ": gp["Delta"], "Put Θ": gp["Theta(tgl)"],
-                        "Abstand %": round((k / S - 1) * 100, 1),
-                    })
-                st.markdown(f"**{fr:%d.%m.%Y} ({fr:%a})** · {tage} Tage")
-                st.dataframe(pd.DataFrame(zeilen), width='stretch',
-                             hide_index=True)
+    modus = st.radio(
+        "Strikes", ["echte aus der Optionskette", "berechnet (ohne Netz)"],
+        horizontal=True, key="ke_modus",
+        help="Die Kette listet jeden Strike, den es wirklich gibt — samt "
+             "Marktpreis. Das Raster ist am Geld feiner als in den Flügeln und "
+             "je Verfall verschieden; nachbauen lässt sich das nicht, ablesen "
+             "schon.")
+    spanne = st.slider("Strikes ± % um den Kurs", 2, 25, 8, key="ke_span")
+
+    if modus.startswith("echte"):
+        st.info("Holt die Kette von Yahoo — nur auf Knopfdruck: am selben Zugang "
+                "hängt der nächtliche Kurs-Cron für alle Titel.")
+        schluessel_k = f"ke_dates_{sym}"
+        if st.button("Verfallsdaten laden", key="ke_exp"):
+            st.session_state[schluessel_k] = od.yahoo_verfallsdaten(sym)
+        termine = st.session_state.get(schluessel_k, [])
+        if termine:
+            gewaehlt = st.multiselect("Verfall", termine, default=termine[:2],
+                                      max_selections=3, key="ke_termine")
+            if st.button("Ketten holen", type="primary", key="ke_go_y") and gewaehlt:
+                for exp in gewaehlt:
+                    try:
+                        puts = od.yahoo_kette(sym, exp, "put")
+                        calls = od.yahoo_kette(sym, exp, "call")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"{exp}: Yahoo antwortet nicht wie erwartet — {exc}")
+                        continue
+
+                    gemessen = od.raster_aus_strikes(puts["strike"].tolist(), S)
+                    if gemessen:
+                        od.strike_schritt_merken(sym, gemessen, f"Kette {exp}")
+
+                    tage = od.tage_bis(exp, date.today(), mitzaehlen)
+                    T = tage / 365
+                    im_band = puts[(puts["strike"] >= S * (1 - spanne / 100))
+                                   & (puts["strike"] <= S * (1 + spanne / 100))]
+                    c_idx = calls.set_index("strike")
+                    zeilen = []
+                    for _, z in im_band.iterrows():
+                        k = float(z["strike"])
+                        gp = griechen(S, k, T, r, sigma, N_TABELLE, "put")
+                        gc = griechen(S, k, T, r, sigma, N_TABELLE, "call")
+                        markt_call = (c_idx.loc[k, "mid"]
+                                      if k in c_idx.index else float("nan"))
+                        if hasattr(markt_call, "iloc"):
+                            markt_call = markt_call.iloc[0]
+                        zeilen.append({
+                            "Call Δ": gc["Delta"],
+                            "Call Modell": gc["Preis"],
+                            "Call Markt": None if markt_call != markt_call
+                                          else round(float(markt_call), 2),
+                            "Strike": k,
+                            "Put Markt": None if z["mid"] != z["mid"]
+                                         else round(float(z["mid"]), 2),
+                            "Put Modell": gp["Preis"],
+                            "Put Δ": gp["Delta"],
+                            "Abstand %": round((k / S - 1) * 100, 1),
+                        })
+                    st.markdown(f"**{exp}** · {tage} Tage · {len(zeilen)} echte Strikes"
+                                + (f" · gemessenes Raster {eur(gemessen)}"
+                                   if gemessen else ""))
+                    if zeilen:
+                        st.dataframe(pd.DataFrame(zeilen), width='stretch',
+                                     hide_index=True)
+                    else:
+                        st.warning("Keine Strikes in diesem Band.")
+                st.caption("„Markt\" ist die Mitte aus bid/ask, nicht der letzte "
+                           "Handel — der ist bei dünnen Kontrakten Wochen alt. "
+                           "Fehlt der Wert, gab es kein beidseitiges Angebot.")
+    else:
+        w1, w2 = st.columns(2)
+        with w1:
+            n_wochen = st.slider("Verfallswochen", 1, 8, 4, key="ke_wochen")
+        with w2:
+            schritt = st.number_input("Strike-Schritt", min_value=0.25, max_value=50.0,
+                                      value=float(schritt_db), step=0.25,
+                                      key="ke_schritt",
+                                      help="Vorbelegt aus dem gespeicherten Raster. "
+                                           "Sobald einmal eine echte Kette geholt "
+                                           "wurde, steht hier der gemessene Wert.")
+        if st.button("Kette berechnen", type="primary", key="ke_go"):
+            strikes = op.find_strike_range(S, -S * spanne / 100, S * spanne / 100,
+                                           schritt)
+            with st.spinner(f"{len(strikes) * n_wochen * 2} Optionen …"):
+                for fr in od.naechste_freitage(n_wochen):
+                    tage = od.tage_bis(fr, date.today(), mitzaehlen)
+                    T = tage / 365
+                    zeilen = []
+                    for k in strikes:
+                        gc = griechen(S, k, T, r, sigma, N_TABELLE, "call")
+                        gp = griechen(S, k, T, r, sigma, N_TABELLE, "put")
+                        zeilen.append({
+                            "Call Δ": gc["Delta"], "Call Θ": gc["Theta(tgl)"],
+                            "Call": gc["Preis"], "Strike": k, "Put": gp["Preis"],
+                            "Put Δ": gp["Delta"], "Put Θ": gp["Theta(tgl)"],
+                            "Abstand %": round((k / S - 1) * 100, 1),
+                        })
+                    st.markdown(f"**{fr:%d.%m.%Y} ({fr:%a})** · {tage} Tage")
+                    st.dataframe(pd.DataFrame(zeilen), width='stretch',
+                                 hide_index=True)
+            st.caption("Berechnete Strikes — nicht jeder davon muss an der Börse "
+                       "existieren. Sicher ist nur die echte Kette.")
 
 # ---------------------------------------------------------------------------
 # 4) Implizite Vola
@@ -368,8 +442,9 @@ with tab_iv:
         with i1:
             typ_i = st.radio("Typ", ["put", "call"], horizontal=True, key="iv_typ")
         with i2:
-            k_i = st.number_input("Strike", value=float(op.find_next_strike_dyn(
-                S, S * ABSTAND_PUT_PCT / 100)), step=1.0, format="%.2f", key="iv_k")
+            k_i = st.number_input(
+                "Strike", value=od.naechster_strike(S, ABSTAND_PUT_PCT, sym),
+                step=1.0, format="%.2f", key="iv_k")
         with i3:
             verfall_i = st.date_input("Verfall", value=od.naechste_freitage(1)[0],
                                       key="iv_v")

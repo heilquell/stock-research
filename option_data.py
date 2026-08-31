@@ -150,6 +150,18 @@ def yahoo_verfallsdaten(symbol: str) -> list[str]:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _yahoo_kette_roh(symbol: str, verfall: str) -> dict[str, pd.DataFrame]:
+    """Ein Abruf liefert Puts UND Calls — also auch nur einmal anfragen.
+
+    Ohne diese Zwischenstufe holte jede Seite des Buches ihre eigene Kette und
+    verdoppelte die Anfragen an Yahoo, obwohl beide in derselben Antwort
+    stehen.
+    """
+    import yfinance as yf
+    ch = yf.Ticker(symbol).option_chain(verfall)
+    return {"put": ch.puts.copy(), "call": ch.calls.copy()}
+
+
 def yahoo_kette(symbol: str, verfall: str, typ: str) -> pd.DataFrame:
     """Optionskette eines Verfalltags.
 
@@ -157,9 +169,7 @@ def yahoo_kette(symbol: str, verfall: str, typ: str) -> pd.DataFrame:
     eine implizite Vola rechnen darf. ``lastPrice`` ist der letzte *Handel* —
     bei duennen Kontrakten Wochen alt, ohne dass die Zahl das verriete.
     """
-    import yfinance as yf
-    ch = yf.Ticker(symbol).option_chain(verfall)
-    df = (ch.puts if typ == "put" else ch.calls).copy()
+    df = _yahoo_kette_roh(symbol, verfall)[typ].copy()
     spalten = ["strike", "bid", "ask", "lastPrice", "impliedVolatility",
                "volume", "openInterest", "lastTradeDate"]
     df = df[[s for s in spalten if s in df.columns]]
@@ -191,3 +201,75 @@ def naechste_freitage(anzahl: int = 8, ab: date | None = None) -> list[date]:
     tage = (4 - ab.weekday()) % 7 or 7
     erster = ab + timedelta(days=tage)
     return [erster + timedelta(weeks=i) for i in range(anzahl)]
+
+# --------------------------------------------------------------------------
+# Strike-Raster
+# --------------------------------------------------------------------------
+# Ein Wert je Kurshoehe — "unter 50 → 2,5, unter 200 → 5, darueber 10" — ist
+# das falsche Modell. Am 31.08.2026 nachgemessen: ASML steht bei 1.696 und hat
+# 5er-Schritte (am Geld 2,50), INTC steht bei 90 und hat 1er-Schritte. Das
+# Raster haengt am Titel, nicht an der Kurshoehe; es ist am Geld fein und in
+# den Fluegeln grob; und es unterscheidet sich je Verfall (ADBE woechentlich
+# 2,50, monatlich 5,00).
+#
+# Deshalb die Rangfolge: echte Strikes aus der Kette schlagen jede Schaetzung.
+# Wo keine Kette vorliegt, zaehlt der zuletzt gemessene Abstand, dann der aus
+# der eigenen Handelshistorie abgeleitete, und erst zuletzt die Kurs-Staffel.
+def strike_raster_anlegen() -> None:
+    with verbindung() as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS strike_raster (
+                       symbol      TEXT PRIMARY KEY,
+                       schritt     REAL NOT NULL,
+                       quelle      TEXT NOT NULL,
+                       gemessen_am TEXT NOT NULL DEFAULT (datetime('now')))""")
+
+
+def staffel_nach_kurs(kurs: float) -> float:
+    """Letzter Ausweg, wenn ueber den Titel nichts bekannt ist."""
+    return 2.5 if kurs < 50 else 5.0 if kurs < 200 else 10.0
+
+
+def strike_schritt(symbol: str, kurs: float) -> tuple[float, str]:
+    """Abstand zwischen zwei Strikes samt Herkunft der Angabe."""
+    strike_raster_anlegen()
+    with verbindung() as c:
+        row = c.execute("SELECT schritt, quelle, gemessen_am FROM strike_raster "
+                        " WHERE symbol = ?", (symbol,)).fetchone()
+    if row:
+        return float(row[0]), f"{row[1]}, {row[2][:10]}"
+    return staffel_nach_kurs(kurs), "geschätzt nach Kurshöhe"
+
+
+def strike_schritt_merken(symbol: str, schritt: float, quelle: str) -> None:
+    strike_raster_anlegen()
+    with verbindung() as c:
+        c.execute("INSERT OR REPLACE INTO strike_raster (symbol, schritt, quelle, "
+                  "gemessen_am) VALUES (?, ?, ?, datetime('now'))",
+                  (symbol, float(schritt), quelle))
+
+
+def raster_aus_strikes(strikes: list[float], kurs: float) -> float | None:
+    """Haeufigster Abstand am Geld — das ist der Wert, der zaehlt.
+
+    Gemessen wird bewusst nur innerhalb von fuenf Prozent um den Kurs: in den
+    Fluegeln sind die Abstaende ein Vielfaches davon, und dort wird ohnehin
+    nicht gehandelt.
+    """
+    strikes = sorted(set(float(k) for k in strikes))
+    if len(strikes) < 3:
+        return None
+    nah = [round(b - a, 4) for a, b in zip(strikes, strikes[1:])
+           if abs(a - kurs) <= kurs * 0.05]
+    if not nah:
+        nah = [round(b - a, 4) for a, b in zip(strikes, strikes[1:])]
+    if not nah:
+        return None
+    from collections import Counter
+    return float(Counter(nah).most_common(1)[0][0])
+
+
+def naechster_strike(kurs: float, abstand_pct: float, symbol: str) -> float:
+    """Strike in der Naehe von ``kurs * (1 + abstand_pct/100)``, auf dem Raster."""
+    schritt, _ = strike_schritt(symbol, kurs)
+    ziel = kurs * (1 + abstand_pct / 100)
+    return round(round(ziel / schritt) * schritt, 4)
