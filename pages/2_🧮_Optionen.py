@@ -52,6 +52,37 @@ def griechen(S, K, T, r, sigma, n, typ, ausuebung="american"):
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
+def p_itm(S, K, T, r, sigma, typ):
+    return op.wahrscheinlichkeit_itm(S, K, T, r, sigma, typ)
+
+
+def andienungs_hinweis(preis_opt, S, K, typ):
+    """Warnt vor vorzeitiger Ausuebung — anhand des Zeitwerts, nicht des Kalenders.
+
+    Ausgeuebt wird vorzeitig, wenn der Zeitwert kleiner ist als das, was der
+    Gegenseite dadurch zufaellt: beim Call die Dividende, beim Put der Zins
+    auf den Strike. Der Zeitwert steht ohnehin da, das Datum der naechsten
+    Dividende nicht — in ``company_info`` ist es teils Jahre alt (ADBE fuehrt
+    dort 2005). Also wird gesagt, was messbar ist, und nicht geraten.
+    """
+    innerer = max(K - S, 0) if typ == "put" else max(S - K, 0)
+    if innerer <= 0:
+        return None
+    zeitwert = preis_opt - innerer
+    if zeitwert > max(0.01 * K, 0.25):
+        return None
+    # Tief im Geld kann der Baum minimal unter den inneren Wert rutschen —
+    # Rundung, kein echter Negativwert. Angezeigt wird deshalb nie "-0,00".
+    zeitwert = max(0.0, zeitwert)
+    grund = ("eine Dividende vor dem Verfall" if typ == "call"
+             else "der Zins auf den Strike")
+    return (f"Die Option ist {eur(innerer)} im Geld und hat nur noch "
+            f"{eur(zeitwert)} Zeitwert. Ab hier lohnt sich vorzeitige Ausübung "
+            f"für die Gegenseite, sobald {grund} mehr bringt — kurzfristige "
+            "Andienung ist möglich, unabhängig von der Restlaufzeit.")
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
 def implizite_vola(marktpreis, S, K, T, r, n, typ, ausuebung="american"):
     return float(op.berechne_implizite_vola(marktpreis, S, K, T, r, n, typ, ausuebung))
 
@@ -225,19 +256,25 @@ with tab_roll:
         rueckkauf = preis(S, k_alt, rest_alt / 365, r, sigma, N_TABELLE, typ)
         itm = max(k_alt - S, 0) if typ == "put" else max(S - k_alt, 0)
 
+        p_alt = p_itm(S, k_alt, rest_alt / 365, r, sigma, typ)
         st.markdown(
             f"**Offene Position:** {typ.upper()} {eur(k_alt)} · Verfall "
             f"**{verfall_alt:%d.%m.%Y (%a)}** · noch "
             f"**{rest_alt} {'Tag' if rest_alt == 1 else 'Tage'}** · "
             f"Rückkauf {eur(rueckkauf)}"
-            + (f" · **{eur(itm)} im Geld**" if itm else ""))
+            + (f" · **{eur(itm)} im Geld**" if itm else "")
+            + f" · Andienung **{p_alt * 100:.0f} %**")
+        warnung_roll = andienungs_hinweis(rueckkauf, S, k_alt, typ)
+        if warnung_roll:
+            st.warning(warnung_roll)
 
         reihen = []
         for t in kandidaten:
             tage = od.tage_bis(t, date.today(), mitzaehlen)
             p = preis(S, k_neu, tage / 365, r, sigma, N_TABELLE, typ)
             reihen.append({"Verfall": t, "Tage": tage, "Neuer Preis": round(p, 2),
-                           "Credit": round(p - rueckkauf, 2)})
+                           "Credit": round(p - rueckkauf, 2),
+                           "Andienung": p_itm(S, k_neu, tage / 365, r, sigma, typ)})
         beste = next((z for z in reihen if z["Credit"] >= min_credit), None)
 
         m1, m2, m3 = st.columns(3)
@@ -259,6 +296,7 @@ with tab_roll:
             "länger": z["Tage"] - rest_alt,
             "Neuer Preis": z["Neuer Preis"],
             "Credit": z["Credit"],
+            "Andienung %": round(z["Andienung"] * 100, 1),
             "": "⭐" if beste and z["Verfall"] == beste["Verfall"]
                 else ("✓" if z["Credit"] >= min_credit else ""),
         } for z in reihen])
@@ -291,7 +329,13 @@ with tab_roll:
                 f"{typ.upper()} {eur(k_neu)} mit Verfall "
                 f"{beste['Verfall']:%d.%m.%Y} für {eur(beste['Neuer Preis'])} "
                 f"verkaufen → **Credit {eur(beste['Credit'])}** je Kontrakt "
-                f"({eur(beste['Credit'] * 100, 0)} bei Multiplikator 100).")
+                f"({eur(beste['Credit'] * 100, 0)} bei Multiplikator 100). "
+                f"Die Andienungswahrscheinlichkeit geht dabei von "
+                f"{p_alt * 100:.0f} % auf {beste['Andienung'] * 100:.0f} %"
+                + (" — mehr Prämie, aber auch mehr Risiko."
+                   if beste["Andienung"] > p_alt else
+                   " — mehr Prämie bei weniger Risiko."
+                   if beste["Andienung"] < p_alt else "."))
 
         with st.expander("Rechenweg"):
             st.code(
@@ -342,6 +386,32 @@ with tab_preis:
         st.caption(f"innerer Wert {eur(innerer)} · Zeitwert "
                    f"{eur(g['Preis'] - innerer)} · Abstand zum Kurs "
                    f"{(k_p / S - 1) * 100:+.1f} %")
+
+        pi = p_itm(S, k_p, T, r, sigma, typ_p)
+        pb = min(1.0, 2 * pi)
+        a1, a2, a3 = st.columns(3)
+        a1.metric("im Geld bei Verfall", f"{pi * 100:.1f} %",
+                  help="Wahrscheinlichkeit, dass die Option am Verfalltag im "
+                       "Geld steht — bei einer verkauften Option also die "
+                       "Wahrscheinlichkeit der Andienung. Risikoneutral "
+                       "gerechnet, mit dem Zins als Drift.")
+        a2.metric("Strike wird berührt", f"{pb * 100:.1f} %",
+                  help="Mindestens einmal bis zum Verfall. Rund das Doppelte — "
+                       "eine Position kann durchs Geld laufen und trotzdem aus "
+                       "dem Geld verfallen.")
+        a3.metric("|Delta| als Faustregel", f"{abs(g['Delta']) * 100:.1f} %",
+                  delta=f"{(abs(g['Delta']) - pi) * 100:+.1f} Punkte",
+                  delta_color="off",
+                  help="Delta wird gern als Andienungswahrscheinlichkeit "
+                       "genommen, ist aber eine andere Größe: es steckt d1 "
+                       "darin, in der Wahrscheinlichkeit d2. Weil d1 größer "
+                       "ist als d2, liegt Delta beim **Call über** der "
+                       "Wahrscheinlichkeit und beim **Put darunter** — die "
+                       "Faustregel irrt also je nach Seite in die eine oder "
+                       "die andere Richtung.")
+        warnung = andienungs_hinweis(g["Preis"], S, k_p, typ_p)
+        if warnung:
+            st.warning(warnung)
 
         g1, g2 = st.columns(2)
         with g1:
@@ -472,6 +542,8 @@ with tab_kette:
                                          else round(float(z["mid"]), 2),
                             "Put Modell": gp["Preis"],
                             "Put Δ": gp["Delta"],
+                            "Put Andienung %": round(
+                                p_itm(S, k, T, r, sigma, "put") * 100, 1),
                             "Abstand %": round((k / S - 1) * 100, 1),
                         })
                     st.markdown(f"**{exp}** · {tage} Tage · {len(zeilen)} echte Strikes"
@@ -511,6 +583,8 @@ with tab_kette:
                             "Call Δ": gc["Delta"], "Call Θ": gc["Theta(tgl)"],
                             "Call": gc["Preis"], "Strike": k, "Put": gp["Preis"],
                             "Put Δ": gp["Delta"], "Put Θ": gp["Theta(tgl)"],
+                            "Put Andienung %": round(
+                                p_itm(S, k, T, r, sigma, "put") * 100, 1),
                             "Abstand %": round((k / S - 1) * 100, 1),
                         })
                     st.markdown(f"**{fr:%d.%m.%Y} ({fr:%a})** · {tage} Tage")

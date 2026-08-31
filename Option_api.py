@@ -122,6 +122,39 @@ def black_scholes(S, K, T, r, sigma, option_type='call'):
     return price
 
 
+def wahrscheinlichkeit_itm(S, K, T, r, sigma, option_type='put'):
+    """Wahrscheinlichkeit, dass die Option am Verfalltag im Geld steht.
+
+    Das ist N(-d2) fuer den Put und N(d2) fuer den Call — NICHT N(d1) und
+    damit auch nicht das Delta. Delta wird als Faustregel gerne dafuer
+    genommen und liegt systematisch daneben: am Geld, ein Jahr Laufzeit,
+    r = 5 %, sigma = 20 % ergibt das Delta eines Calls 0,637, die
+    Wahrscheinlichkeit im Geld aber 0,560.
+
+    Wichtige Einschraenkung: gerechnet wird im risikoneutralen Mass, also mit
+    dem Zins als Drift statt mit einer erwarteten Rendite. Das ist die
+    Konvention, in der auch Broker diese Zahl ausweisen — eine Aussage
+    darueber, wohin der Kurs wirklich laeuft, ist es nicht.
+    """
+    if T <= 0 or sigma <= 0:
+        drin = (S < K) if option_type == 'put' else (S > K)
+        return 1.0 if drin else 0.0
+    d2 = (np.log(S / K) + (r - 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    return float(norm.cdf(-d2) if option_type == 'put' else norm.cdf(d2))
+
+
+def wahrscheinlichkeit_beruehrung(S, K, T, r, sigma, option_type='put'):
+    """Wahrscheinlichkeit, den Strike bis zum Verfall mindestens einmal zu sehen.
+
+    Naeherung ueber das Spiegelungsprinzip: rund das Doppelte der
+    Wahrscheinlichkeit, am Ende im Geld zu stehen (gedeckelt bei 1). Fuer die
+    Frage, ob man zwischendurch handeln muss, ist das die ehrlichere Zahl —
+    eine Position kann durchs Geld laufen und trotzdem aus dem Geld
+    verfallen.
+    """
+    return min(1.0, 2.0 * wahrscheinlichkeit_itm(S, K, T, r, sigma, option_type))
+
+
 # --- Binomial Modell ---
 def binomial_preis(S, K, T, r, sigma, n, opt_type='put'):
     if T <= 0: return max(K - S, 0) if opt_type == 'put' else max(S - K, 0)
