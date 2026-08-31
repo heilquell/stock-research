@@ -166,8 +166,9 @@ mitzaehlen = st.checkbox(
          "drei Vola-Punkte — mehr, als zwischen amerikanischer und europäischer "
          "Ausübung liegt.")
 
-tab_roll, tab_preis, tab_kette, tab_iv = st.tabs(
-    ["🔁 Rollen", "🧮 Preis & Griechen", "📋 Optionskette", "📐 Implizite Vola"])
+tab_roll, tab_wheel, tab_preis, tab_kette, tab_iv = st.tabs(
+    ["🔁 Rollen", "🎡 Wheel", "🧮 Preis & Griechen", "📋 Optionskette",
+     "📐 Implizite Vola"])
 
 # ---------------------------------------------------------------------------
 # 1) Rollen
@@ -353,7 +354,158 @@ with tab_roll:
                 language=None)
 
 # ---------------------------------------------------------------------------
-# 2) Preis & Griechen
+# 2) Wheel
+# ---------------------------------------------------------------------------
+with tab_wheel:
+    st.subheader("Put verkaufen, andienen lassen, Call darauf verkaufen")
+    st.caption(
+        "Beide Stufen einer Runde nacheinander. Die Zahl, um die es geht, ist "
+        "der **Einstand nach Andienung**: Strike minus vereinnahmte Prämie. Wer "
+        "danach einen Call unterhalb dieses Einstands verkauft, macht bei "
+        "Ausübung einen sicheren Verlust — die Prämie sieht trotzdem gut aus.")
+
+    # Wurden im Rollen-Reiter echte Termine geladen, werden sie hier
+    # weiterverwendet. Kein zweiter Abruf bei Yahoo fuer dieselbe Frage.
+    echte = [date.fromisoformat(t)
+             for t in st.session_state.get(f"roll_dates_{sym}", [])]
+    w1, w2, w3 = st.columns(3)
+    with w1:
+        k_put = st.number_input(
+            "Strike des verkauften Puts",
+            value=od.naechster_strike(S, ABSTAND_PUT_PCT, sym),
+            step=1.0, format="%.2f", key=f"wh_kput_{sym}")
+    with w2:
+        termine_w = echte or od.naechste_freitage(8)
+        verfall_put = st.selectbox(
+            "Verfall", termine_w, key=f"wh_v_{sym}",
+            format_func=lambda d: f"{d:%d.%m.%Y (%a)} · "
+                                  f"{od.tage_bis(d, date.today(), mitzaehlen)} T")
+        if not echte:
+            st.caption("erzeugte Freitage — echte Termine lädt der Rollen-Reiter")
+    with w3:
+        kontrakte = st.number_input("Kontrakte", min_value=1, max_value=50, value=1,
+                                    step=1, key="wh_n")
+
+    tage_put = od.tage_bis(verfall_put, date.today(), mitzaehlen)
+    if tage_put <= 0:
+        st.warning("Der Verfall liegt nicht in der Zukunft.")
+    else:
+        praemie_put = preis(S, k_put, tage_put / 365, r, sigma, N_EINZEL, "put")
+        p_and = p_itm(S, k_put, tage_put / 365, r, sigma, "put")
+        kapital = k_put * 100 * kontrakte          # bar hinterlegt, § Cash-Secured
+        einnahme = praemie_put * 100 * kontrakte
+        rendite = einnahme / kapital
+        einstand = k_put - praemie_put             # je Aktie, wenn angedient wird
+
+        st.markdown("#### Stufe 1 — Put verkaufen")
+        s1 = st.columns(4)
+        s1[0].metric("Prämie", eur(einnahme, 0),
+                     help=f"{eur(praemie_put)} je Aktie, {kontrakte} × 100 Stück")
+        s1[1].metric("gebundenes Kapital", eur(kapital, 0),
+                     help="bar hinterlegt: Strike × 100 je Kontrakt")
+        s1[2].metric("Rendite", f"{rendite * 100:.2f} %",
+                     help=f"auf {tage_put} Tage · hochgerechnet aufs Jahr "
+                          f"{rendite * 365 / tage_put * 100:.1f} %")
+        s1[3].metric("Andienung", f"{p_and * 100:.0f} %")
+
+        st.markdown("#### Stufe 2 — angedient, jetzt Call darauf")
+        st.info(f"Bei Andienung kostet die Aktie {eur(k_put)} minus {eur(praemie_put)} "
+                f"Prämie = **Einstand {eur(einstand)}** je Stück "
+                f"({eur(einstand * 100 * kontrakte, 0)} für {kontrakte * 100} Stück). "
+                f"Das sind {(einstand / S - 1) * 100:+.1f} % gegenüber dem heutigen "
+                f"Kurs von {eur(S)}.")
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            tage_call = st.slider("Laufzeit des Calls in Tagen", 5, 120, 30,
+                                  key="wh_tage_call")
+        with c2:
+            spanne_c = st.slider("Call-Strikes ± % um den Einstand", 2, 30, 12,
+                                 key="wh_span")
+        with c3:
+            # Angedient wird nur, wenn der Kurs UNTER dem Put-Strike steht.
+            # Den Call dann mit dem heutigen Kurs zu bepreisen, waere in sich
+            # widerspruechlich: er waere zu teuer angesetzt. Vorgabe ist
+            # deshalb der Put-Strike — der guenstigste Fall einer Andienung.
+            s_and = st.number_input(
+                "Kurs bei Andienung", value=float(k_put), step=1.0, format="%.2f",
+                key=f"wh_sand_{sym}",
+                help="Angedient wird nur unter dem Strike. Vorgabe ist der "
+                     "Strike selbst, also der günstigste Andienungsfall — "
+                     "tiefer eintragen macht das Bild realistischer, wenn die "
+                     "Aktie deutlich gefallen ist.")
+
+        schritt_w, _ = od.strike_schritt(sym, S)
+        strikes_c = op.find_strike_range(einstand, -einstand * spanne_c / 100,
+                                         einstand * spanne_c / 100, schritt_w)
+        T_call = tage_call / 365
+        zeilen = []
+        for kc in strikes_c:
+            pr = preis(s_and, kc, T_call, r, sigma, N_TABELLE, "call")
+            p_weg = p_itm(s_and, kc, T_call, r, sigma, "call")
+            # Ergebnis bei Ausuebung: Kursgewinn gegenueber dem Einstand plus
+            # Call-Praemie. Die Put-Praemie steckt bereits im Einstand und darf
+            # hier NICHT ein zweites Mal gutgeschrieben werden.
+            ergebnis = (kc - einstand + pr) * 100 * kontrakte
+            zeilen.append({
+                "Call-Strike": kc,
+                "Prämie": round(pr * 100 * kontrakte, 0),
+                "wird ausgeübt %": round(p_weg * 100, 1),
+                "Ergebnis bei Ausübung": round(ergebnis, 0),
+                "Rendite gesamt %": round(ergebnis / kapital * 100, 2),
+                "": "⚠ Verlust" if ergebnis < 0 else "",
+            })
+        st.dataframe(pd.DataFrame(zeilen), width='stretch', hide_index=True)
+
+        verlustzeilen = [z for z in zeilen if z["Ergebnis bei Ausübung"] < 0]
+        gesamt_tage = tage_put + tage_call
+        nah = min(zeilen, key=lambda z: abs(z["Call-Strike"] - s_and))
+
+        if verlustzeilen:
+            hoechster = max(z["Call-Strike"] for z in verlustzeilen)
+            tragbar = [z for z in zeilen if z["Ergebnis bei Ausübung"] >= 0]
+            st.warning(
+                f"Bis einschließlich Strike {eur(hoechster)} endet die Runde bei "
+                f"Ausübung **im Minus**, obwohl jedes Mal Prämie fließt. "
+                + (f"Erst ab {eur(min(z['Call-Strike'] for z in tragbar))} geht sie "
+                   f"auf." if tragbar else
+                   "In der gezeigten Spanne geht keiner auf — die Aktie steht zu "
+                   "weit unter dem Einstand."))
+        else:
+            # Kein Verlustbereich ist hier kein gutes Zeichen, sondern eine
+            # Folge der Annahme: Andienung genau am Strike heisst, der Kurs
+            # liegt um die vereinnahmte Praemie ueber dem Einstand — dann endet
+            # jeder Strike positiv. Das muss dabeistehen, sonst liest sich die
+            # Tabelle als Zusicherung.
+            st.info(
+                f"In dieser Annahme endet **jeder** Call-Strike positiv — kein "
+                f"Kunststück: bei Andienung zu {eur(s_and)} liegt der Einstand "
+                f"({eur(einstand)}) bereits um die Put-Prämie darunter. "
+                f"Schwierig wird es erst, wenn die Aktie unter **{eur(einstand)}** "
+                f"steht. Trag oben einen tieferen Andienungskurs ein, dann zeigt "
+                f"die Tabelle, welche Strikes dann noch tragen.")
+
+        st.success(
+            f"**Am Geld:** Call {eur(nah['Call-Strike'])} bringt "
+            f"{eur(nah['Prämie'], 0)} Prämie und wird zu "
+            f"{nah['wird ausgeübt %']:.0f} % ausgeübt; die Runde endete dann mit "
+            f"{eur(nah['Ergebnis bei Ausübung'], 0)} auf {eur(kapital, 0)} "
+            f"gebundenes Kapital — {nah['Rendite gesamt %']:.2f} % in "
+            f"{gesamt_tage} Tagen, aufs Jahr "
+            f"{nah['Rendite gesamt %'] * 365 / gesamt_tage:.1f} %.\n\n"
+            f"Weiter draußen bleibt mehr Kursgewinn und es wird seltener "
+            f"ausgeübt — eine beste Zeile gibt es nicht, die höchste Rendite bei "
+            f"Ausübung hat immer der weiteste Strike, und genau der kommt am "
+            f"seltensten zum Zug.")
+        st.caption(
+            "Was hier NICHT drinsteht: der Fall, dass die Aktie unter den "
+            "Einstand fällt und liegen bleibt. Dann läuft keine Runde weiter, "
+            "sondern es liegt eine Position im Minus im Depot — die Prämien "
+            "mildern den Verlust, sie verhindern ihn nicht. Kurs und "
+            "Volatilität sind für beide Stufen festgehalten.")
+
+# ---------------------------------------------------------------------------
+# 3) Preis & Griechen
 # ---------------------------------------------------------------------------
 with tab_preis:
     p1, p2, p3 = st.columns(3)
@@ -477,7 +629,7 @@ with tab_preis:
                 f"{eur(verlust[hoehepunkt])} je Tag.")
 
 # ---------------------------------------------------------------------------
-# 3) Optionskette
+# 4) Optionskette
 # ---------------------------------------------------------------------------
 with tab_kette:
     schritt_db, herkunft = od.strike_schritt(sym, S)
@@ -594,7 +746,7 @@ with tab_kette:
                        "existieren. Sicher ist nur die echte Kette.")
 
 # ---------------------------------------------------------------------------
-# 4) Implizite Vola
+# 5) Implizite Vola
 # ---------------------------------------------------------------------------
 with tab_iv:
     st.caption("Die eigene Rechnung dreht den Binomialbaum um: welche Vola erklärt "
