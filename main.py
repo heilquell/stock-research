@@ -103,7 +103,11 @@ st.page_link(
     icon="📊",
 )
 
-st.caption("Weitere Tools folgen.")
+st.page_link(
+    "pages/2_🧮_Optionen.py",
+    label="Optionen — Rollen, Preis, Kette, implizite Vola",
+    icon="🧮",
+)
 
 with st.expander("Dokumentation"):
     doku_path = os.path.join(os.path.dirname(__file__), "DOKU.md")

@@ -27,6 +27,7 @@ st.markdown(
 pages = [
     st.Page("main.py", title="Home", icon="🏠", default=True),
     st.Page("pages/1_📊_Crossover.py", title="Crossover", icon="📊"),
+    st.Page("pages/2_🧮_Optionen.py", title="Optionen", icon="🧮"),
 ]
 pg = st.navigation(pages)
 pg.run()
