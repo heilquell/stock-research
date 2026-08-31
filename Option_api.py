@@ -468,16 +468,22 @@ def find_strike_range(aktienkurs, min_abstand, max_abstand, schrittweite):
     [90.0, 95.0, 100.0, 105.0, 110.0]
     """
     
-    min_strike = finde_naechsten_strike(aktienkurs, min_abstand, schrittweite)
-    max_strike = finde_naechsten_strike(aktienkurs, max_abstand, schrittweite)
-    
-    # Alle Strikes im Bereich generieren
+    # Hiess frueher ``finde_naechsten_strike`` — eine Funktion dieses Namens hat
+    # es nie gegeben, der Aufruf endete in einem NameError. Im Notebook faellt
+    # das nicht auf, weil die Strike-Leiter dort ueber ``float_range`` gebaut
+    # wird; erst die Optionskette der Weboberflaeche ruft diese Funktion.
+    min_strike = find_next_strike(aktienkurs, min_abstand, schrittweite)
+    max_strike = find_next_strike(aktienkurs, max_abstand, schrittweite)
+
+    # Alle Strikes im Bereich generieren. Gerundet wird in jedem Schritt, weil
+    # sich Schrittweiten wie 2,5 sonst aufaddieren und der letzte Strike knapp
+    # ueber der Grenze landet — dann fehlt er in der Liste.
     strikes = []
     current = min_strike
-    while current <= max_strike:
-        strikes.append(current)
+    while round(current, 6) <= round(max_strike, 6):
+        strikes.append(round(current, 6))
         current += schrittweite
-    
+
     return strikes
 
 
