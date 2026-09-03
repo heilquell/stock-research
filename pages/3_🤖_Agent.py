@@ -281,7 +281,7 @@ with tab_breite:
                     "im Geld": ("ja" if z and z["im_geld"] else "nein") if z else "—",
                     "Prämie": z["praemie_gesamt"] if z else np.nan,
                     "davon Zeitwert": z["zeitwert"] if z else np.nan,
-                    "Zeitwert-Anteil": z["zeitwert_anteil"] if z else np.nan,
+                    "Zeitwert-Anteil": z["zeitwert_anteil"] * 100 if z else np.nan,
                     "Hebel": z["hebel"] if z else np.nan,
                     "Value": float(v),
                 })
@@ -309,7 +309,7 @@ with tab_breite:
             itm = (gueltig["im Geld"] == "ja").sum()
             c3.metric("davon im Geld", f"{itm}/{len(gueltig)}")
             if "Zeitwert-Anteil" in gueltig:
-                med = gueltig["Zeitwert-Anteil"].median()
+                med = gueltig["Zeitwert-Anteil"].median() / 100.0
                 if pd.notna(med) and med < 0.2:
                     st.warning(
                         f"Der Zeitwert macht im Median nur **{med:.1%}** der "
@@ -401,7 +401,7 @@ with tab_order:
             st.dataframe(
                 vp, width="stretch", hide_index=True,
                 column_config={
-                    "Kursänderung": st.column_config.NumberColumn(format="%.0f %%"),
+                    "Kursänderung": st.column_config.NumberColumn(format="%+.0f %%"),
                     "Kurs bei Verfall": st.column_config.NumberColumn(format="%.2f $"),
                     "Andienung kostet": st.column_config.NumberColumn(format="%.0f $"),
                     "Ergebnis": st.column_config.NumberColumn(format="%.0f $"),

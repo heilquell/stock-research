@@ -348,7 +348,10 @@ def verfall_profil(kurs: float, ent: dict, zerl: dict,
         else:
             ergebnis = inner_ende * stueck - zerl["praemie_gesamt"]
         zeilen.append({
-            "Kursänderung": pct,
+            # In Prozentpunkten, nicht als Bruch: st.column_config.NumberColumn
+            # formatiert nur den Rohwert und rechnet NICHT in Prozent um --
+            # aus -0.15 mit "%.0f %%" wuerde sonst "-0 %".
+            "Kursänderung": pct * 100,
             "Kurs bei Verfall": ende,
             "Andienung kostet": inner_ende * stueck,
             "Ergebnis": ergebnis,
