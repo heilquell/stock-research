@@ -8,3 +8,7 @@ prophet==1.1.5
 streamlit[auth]==1.61.1
 yfinance>=0.2.35
 plotly>=5.18.0
+# Nur fuer agent_export.py: liest die Gewichte aus der .keras-Datei
+# (ein ZIP aus config.json + model.weights.h5). Die Anwendung selbst
+# rechnet in NumPy und braucht weder h5py noch TensorFlow.
+h5py>=3.10

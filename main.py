@@ -109,6 +109,12 @@ st.page_link(
     icon="🧮",
 )
 
+st.page_link(
+    "pages/3_🤖_Agent.py",
+    label="Options-Agent — Politik-Röntgen (Anmeldung nötig)",
+    icon="🤖",
+)
+
 with st.expander("Dokumentation"):
     doku_path = os.path.join(os.path.dirname(__file__), "DOKU.md")
     if os.path.exists(doku_path):
