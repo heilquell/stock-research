@@ -36,7 +36,7 @@ import pandas as pd
 from Option_api import binomial_optionspreis
 
 DB_PATH = os.environ.get("STOCKS_DB", "/data/stocks.db")
-GEWICHTE_PATH = os.environ.get("AGENT_WEIGHTS", "/data/agent_v8.npz")
+GEWICHTE_PATH = os.environ.get("AGENT_WEIGHTS", "/data/agent_v9.npz")
 
 # Aktionsraum aus Opt_tensorflowV8.py (OptionsEnvV8) — Reihenfolge ist
 # bindend, sie entspricht der Reihenfolge der Softmax-Ausgaenge.

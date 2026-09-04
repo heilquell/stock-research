@@ -15,6 +15,9 @@ Ausgaben lassen sich zu leicht als Handelsempfehlung missverstehen.
 
 Rechenkern: ``agent_infer`` (reines NumPy, kein TensorFlow).
 """
+import os
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -25,13 +28,13 @@ from auth import auth_konfiguriert, sidebar_login, user_email
 
 st.set_page_config(page_title="Options-Agent", page_icon="🤖", layout="wide")
 
-# Ticker, auf denen v8 trainiert wurde (ARKK fehlt in der Kursdatenbank).
+# Trainings-Ticker (ARKK fehlt in der Kursdatenbank, SQ liefert keine Daten mehr).
 TRAIN_TICKER = [
     "SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA",
     "META", "MDB", "ASML", "ADBE", "PLTR", "LLY", "UNH", "JPM", "CAT", "GE",
     "BA", "DIS", "HON", "AMD", "NFLX", "INTC", "PYPL", "SBUX", "NKE", "JNJ",
     "PG", "MRK", "CRM", "SHOP", "SNOW", "AVGO", "MU", "MRVL", "MRNA", "GILD",
-    "SQ", "ROKU", "BABA", "PDD", "COIN",
+    "ROKU", "BABA", "PDD", "COIN",
 ]
 # Nie im Training gesehen — der ehrlichere Prüfstein.
 OOS_TICKER = ["UBER", "CRWD", "PANW", "ZS", "WMT", "COST", "HD", "V", "MA",
@@ -83,9 +86,18 @@ except FileNotFoundError as e:
     st.stop()
 
 st.title("🤖 Options-Agent — Politik-Röntgen")
+# Welches Modell hier rechnet, gehoert sichtbar auf die Seite: v8 und v9
+# handeln voellig verschiedene Strikes, und ohne Angabe waere aus den
+# Ausgaben nicht zu erkennen, welche Politik man gerade vor sich hat.
+_modell = os.path.basename(ai.GEWICHTE_PATH)
+try:
+    _stand = datetime.fromtimestamp(os.path.getmtime(ai.GEWICHTE_PATH)).strftime("%d.%m.%Y")
+except OSError:
+    _stand = "unbekannt"
 st.caption(
-    "PPO v8, 24 Eingangsgrößen → 4 Entscheidungsköpfe. Rechnung in reinem "
-    "NumPy (116.118 Parameter, ~0,1 ms je Entscheidung). "
+    f"PPO, 24 Eingangsgrößen → 4 Entscheidungsköpfe. Gewichte `{_modell}` "
+    f"(Stand {_stand}). Rechnung in reinem NumPy (116.118 Parameter, "
+    "~0,1 ms je Entscheidung). "
     "**Keine Handelsempfehlung** — die Seite zeigt, was das Modell ausgibt, "
     "nicht was zu tun ist."
 )
