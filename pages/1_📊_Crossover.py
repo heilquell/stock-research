@@ -18,8 +18,10 @@ def scroll_to_top():
     """
     components.html(scroll_script)
 
-# Setze das Layout auf "wide mode"
-st.set_page_config(layout="wide")
+# Ohne page_title faellt Streamlit auf den Dateinamen des Einstiegspunkts
+# zurueck -- und der heisst app.py. Genau deshalb stand auf dieser einen
+# Seite "app" im Browser-Tab, waehrend alle anderen ihren Namen zeigten.
+st.set_page_config(page_title="Crossover", page_icon="📊", layout="wide")
 
 def remove_chars(string, chars):
     translation_table = {ord(char): None for char in chars}
