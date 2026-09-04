@@ -38,6 +38,16 @@ from Option_api import binomial_optionspreis
 DB_PATH = os.environ.get("STOCKS_DB", "/data/stocks.db")
 GEWICHTE_PATH = os.environ.get("AGENT_WEIGHTS", "/data/agent_v9.npz")
 
+# Oberhalb dieser Vola ist der IV-Proxy kein Preis mehr, sondern eine
+# Hochrechnung: die Formel nimmt die 20-Tage-Volatilitaet, und ein einzelner
+# Ereignistag (MRNA am 19.08.2026: +177 % bei 30-fachem Volumen) treibt sie
+# auf ein Vielfaches dessen, was am Markt je bezahlt wuerde. Gemessen an
+# 157.868 Tagesbeobachtungen liegt das 99,9 %-Quantil bei 260 % -- alles
+# darueber ist die Ausnahme und gehoert gekennzeichnet, nicht stillschweigend
+# weitergereicht. Bewusst nur eine Warnschwelle, keine Deckelung: der
+# Zustandsvektor muss bleiben, was er im Training war.
+IV_WARNSCHWELLE = 2.0
+
 # Aktionsraum aus Opt_tensorflowV8.py (OptionsEnvV8) — Reihenfolge ist
 # bindend, sie entspricht der Reihenfolge der Softmax-Ausgaenge.
 AKTIONEN = ["nothing", "buy_call", "buy_put", "sell_call", "sell_put",

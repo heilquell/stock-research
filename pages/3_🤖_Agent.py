@@ -300,6 +300,7 @@ with tab_breite:
                 zeilen.append({
                     "Ticker": t,
                     "Kurs": kurs,
+                    "IV": sigma * 100,
                     "Aktion": e["aktion"],
                     "p": e["aktion_p"],
                     "p gesamt": e["p_gesamt"],
@@ -321,6 +322,13 @@ with tab_breite:
             d, width="stretch", hide_index=True,
             column_config={
                 "Kurs": st.column_config.NumberColumn(format="%.2f"),
+                "IV": st.column_config.NumberColumn(
+                    format="%.0f %%",
+                    help="IV-Proxy aus der 20-Tage-Volatilität. Median über "
+                         "alle Titel 32 %, das 99,9 %-Quantil 260 %. Steht "
+                         "hier ein dreistelliger Wert, hat ein einzelner "
+                         "Ereignistag die Reihe geprägt — die Prämie daneben "
+                         "ist dann rechnerisch richtig, aber kein Marktpreis."),
                 "p gesamt": st.column_config.NumberColumn(
                     format="%.3f",
                     help="Wahrscheinlichkeit der vollständigen Order — "
@@ -347,6 +355,16 @@ with tab_breite:
                          "Portfolioänderung in Prozent des Startkapitals, "
                          "nach unten bis −50 offen."),
             })
+
+        if "IV" in d and (d["IV"] > ai.IV_WARNSCHWELLE * 100).any():
+            heikel = d.loc[d["IV"] > ai.IV_WARNSCHWELLE * 100, ["Ticker", "IV"]]
+            st.warning(
+                "Unplausible Volatilität bei: "
+                + ", ".join(f"**{r.Ticker}** ({r.IV:.0f} %)"
+                            for r in heikel.itertuples())
+                + ". Ein einzelner Ereignistag in den letzten 20 Handelstagen "
+                "treibt den IV-Proxy hoch; die Prämien dieser Zeilen sind "
+                "rechnerisch korrekt, aber weit über jedem realen Marktpreis.")
 
         gueltig = d[d["Aktion"].isin(ai.AKTIONEN)]
         if not gueltig.empty:
@@ -419,6 +437,20 @@ with tab_order:
             f'{e["p_gesamt"]:.3f} — das {e["p_gesamt_vs_zufall"]:.0f}-fache '
             f'dessen, was blindes Raten unter den 486 Kombinationen ergäbe '
             f'(1/486 = 0,002).')
+
+        if sigma > ai.IV_WARNSCHWELLE:
+            groesster = float(df["Ret1d"].tail(20).abs().max() or 0.0) * 100
+            gedeckelt = ai.praemien_zerlegung(kurs, e, ai.IV_WARNSCHWELLE)
+            hinweis = ""
+            if gedeckelt is not None:
+                hinweis = (f" Bei auf {ai.IV_WARNSCHWELLE:.0%} gedeckelter Vola "
+                           f"wären es {gedeckelt['praemie_gesamt']:,.0f} $.")
+            st.warning(
+                f"IV-Proxy {sigma:.0%} — die größte Tagesbewegung der letzten "
+                f"20 Handelstage war {groesster:.0f} %. Ein solcher Ereignistag "
+                f"treibt die 20-Tage-Volatilität und damit den Optionspreis weit "
+                f"über jeden Marktpreis. Die Prämie unten ist rechnerisch "
+                f"richtig, aber nicht handelbar.{hinweis}")
 
         z = ai.praemien_zerlegung(kurs, e, sigma)
         if z is None:
