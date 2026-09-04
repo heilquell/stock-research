@@ -29,16 +29,23 @@ from auth import auth_konfiguriert, sidebar_login, user_email
 st.set_page_config(page_title="Options-Agent", page_icon="🤖", layout="wide")
 
 # Trainings-Ticker (ARKK fehlt in der Kursdatenbank, SQ liefert keine Daten mehr).
-TRAIN_TICKER = [
+# Alphabetisch, damit man im Auswahlfeld etwas findet. Das ist gefahrlos: die
+# Reihenfolge dient nur der Anzeige, gerechnet wird immer mit dem Symbol.
+# Die einzige Stelle, an der Reihenfolge zaehlen wuerde, waere ein
+# `index=`-Vorgabewert -- der steht deshalb unten als .index("SYMBOL").
+TRAIN_TICKER = sorted([
     "SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA",
     "META", "MDB", "ASML", "ADBE", "PLTR", "LLY", "UNH", "JPM", "CAT", "GE",
     "BA", "DIS", "HON", "AMD", "NFLX", "INTC", "PYPL", "SBUX", "NKE", "JNJ",
     "PG", "MRK", "CRM", "SHOP", "SNOW", "AVGO", "MU", "MRVL", "MRNA", "GILD",
     "ROKU", "BABA", "PDD", "COIN",
-]
+])
 # Nie im Training gesehen — der ehrlichere Prüfstein.
-OOS_TICKER = ["UBER", "CRWD", "PANW", "ZS", "WMT", "COST", "HD", "V", "MA",
-              "ABNB", "DASH"]
+OOS_TICKER = sorted(["UBER", "CRWD", "PANW", "ZS", "WMT", "COST", "HD", "V",
+                     "MA", "ABNB", "DASH"])
+ALLE_TICKER = TRAIN_TICKER + OOS_TICKER
+
+VORGABE = "AAPL"   # Startwert der Auswahlfelder, per Symbol statt per Position
 
 
 # --------------------------------------------------------------------------
@@ -127,7 +134,8 @@ with tab_sweep:
     )
 
     c1, c2 = st.columns([1, 2])
-    sym = c1.selectbox("Ausgangslage von", TRAIN_TICKER, index=3, key="sweep_sym")
+    sym = c1.selectbox("Ausgangslage von", TRAIN_TICKER,
+                       index=TRAIN_TICKER.index(VORGABE), key="sweep_sym")
     feat_idx = c2.selectbox(
         "Merkmal durchfahren", range(24),
         format_func=lambda i: f"{i:2d} · {ai.FEATURE_NAMEN[i]}",
@@ -209,7 +217,8 @@ with tab_karte:
         "heutigen Stand des gewählten Titels. Eine einfarbige Fläche heißt: "
         "der Agent macht in jeder Marktlage dasselbe."
     )
-    sym2 = st.selectbox("Ausgangslage von", TRAIN_TICKER, index=3, key="karte_sym")
+    sym2 = st.selectbox("Ausgangslage von", TRAIN_TICKER,
+                        index=TRAIN_TICKER.index(VORGABE), key="karte_sym")
     s0, _ = basis_zustand(sym2)
     if s0 is None:
         st.warning(f"Zu wenig Historie für {sym2}.")
@@ -266,7 +275,7 @@ with tab_breite:
     welche = st.radio("Universum", ["Training (44)", "Out-of-Sample (11)", "beide"],
                       horizontal=True, index=2)
     liste = (TRAIN_TICKER if welche.startswith("Training")
-             else OOS_TICKER if welche.startswith("Out") else TRAIN_TICKER + OOS_TICKER)
+             else OOS_TICKER if welche.startswith("Out") else ALLE_TICKER)
 
     if st.button("Durchrechnen", type="primary"):
         zeilen = []
@@ -336,7 +345,8 @@ with tab_breite:
 with tab_order:
     st.subheader("Was der Agent ausgibt — und was es wirtschaftlich heißt")
     c1, c2 = st.columns([1, 1])
-    sym3 = c1.selectbox("Titel", TRAIN_TICKER + OOS_TICKER, index=3, key="ord_sym")
+    sym3 = c1.selectbox("Titel", ALLE_TICKER,
+                        index=ALLE_TICKER.index(VORGABE), key="ord_sym")
     ref = c2.number_input(
         "Bezugsfenster (Handelstage)", 60, 500, ai.REF_TAGE, 10,
         help="Vier der 24 Merkmale sind auf den Kurs am Episodenstart "
