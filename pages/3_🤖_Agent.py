@@ -272,8 +272,14 @@ with tab_breite:
         "Wenn hier für alle Titel dieselbe Zeile steht, ist die Politik "
         "nicht vom Titel abhängig."
     )
-    welche = st.radio("Universum", ["Training (44)", "Out-of-Sample (11)", "beide"],
-                      horizontal=True, index=2)
+    # Die Zahlen kommen aus den Listen. Hart hingeschrieben standen sie nach
+    # dem Ausbau von SQ falsch da (44 statt 43).
+    welche = st.radio(
+        "Universum",
+        [f"Training ({len(TRAIN_TICKER)})",
+         f"Out-of-Sample ({len(OOS_TICKER)})",
+         f"beide ({len(ALLE_TICKER)})"],
+        horizontal=True, index=2)
     liste = (TRAIN_TICKER if welche.startswith("Training")
              else OOS_TICKER if welche.startswith("Out") else ALLE_TICKER)
 
@@ -314,12 +320,24 @@ with tab_breite:
             d, width="stretch", hide_index=True,
             column_config={
                 "Kurs": st.column_config.NumberColumn(format="%.2f"),
-                "p": st.column_config.NumberColumn(format="%.2f"),
+                "p": st.column_config.NumberColumn(
+                    format="%.2f",
+                    help="Sicherheit des Netzes bei der Aktionswahl "
+                         "(Softmax des Aktionskopfes). Sechs Aktionen stehen "
+                         "zur Wahl, 0,17 ist also reines Würfeln, 1,00 volle "
+                         "Festlegung. Keine Trefferwahrscheinlichkeit — der "
+                         "Agent kann mit p = 0,99 danebenliegen. Gilt nur für "
+                         "die Aktion, nicht für Strike, Laufzeit, Kontrakte."),
                 "Prämie": st.column_config.NumberColumn(format="%.0f $"),
                 "davon Zeitwert": st.column_config.NumberColumn(format="%.0f $"),
                 "Zeitwert-Anteil": st.column_config.NumberColumn(format="%.1f %%"),
                 "Hebel": st.column_config.NumberColumn(format="%.1f ×"),
-                "Value": st.column_config.NumberColumn(format="%.2f"),
+                "Value": st.column_config.NumberColumn(
+                    format="%.2f",
+                    help="Schätzung des Kritikers: welchen künftigen Reward "
+                         "er aus dieser Lage erwartet. Reward ist die "
+                         "Portfolioänderung in Prozent des Startkapitals, "
+                         "nach unten bis −50 offen."),
             })
 
         gueltig = d[d["Aktion"].isin(ai.AKTIONEN)]
