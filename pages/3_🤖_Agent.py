@@ -302,6 +302,7 @@ with tab_breite:
                     "Kurs": kurs,
                     "Aktion": e["aktion"],
                     "p": e["aktion_p"],
+                    "p gesamt": e["p_gesamt"],
                     "Strike": f'{e["strike_pct"]:+.0%}',
                     "Tage": e["laufzeit"],
                     "Kontr.": e["kontrakte"],
@@ -320,6 +321,13 @@ with tab_breite:
             d, width="stretch", hide_index=True,
             column_config={
                 "Kurs": st.column_config.NumberColumn(format="%.2f"),
+                "p gesamt": st.column_config.NumberColumn(
+                    format="%.3f",
+                    help="Wahrscheinlichkeit der vollständigen Order — "
+                         "Aktion × Strike × Laufzeit × Kontrakte, die vier "
+                         "Köpfe sind unabhängig. Bezugspunkt ist hier nicht "
+                         "1/6, sondern 1/486 = 0,002: so viel gäbe blindes "
+                         "Raten unter allen Kombinationen."),
                 "p": st.column_config.NumberColumn(
                     format="%.2f",
                     help="Sicherheit des Netzes bei der Aktionswahl "
@@ -406,6 +414,11 @@ with tab_order:
         m[2].metric("Laufzeit", f'{e["laufzeit"]} T', f'p={e["laufzeit_p"]:.2f}')
         m[3].metric("Kontrakte", e["kontrakte"], f'p={e["kontrakte_p"]:.2f}')
         m[4].metric("Value", f"{float(v):.2f}")
+        st.caption(
+            f'Wahrscheinlichkeit der **gesamten** Order: '
+            f'{e["p_gesamt"]:.3f} — das {e["p_gesamt_vs_zufall"]:.0f}-fache '
+            f'dessen, was blindes Raten unter den 486 Kombinationen ergäbe '
+            f'(1/486 = 0,002).')
 
         z = ai.praemien_zerlegung(kurs, e, sigma)
         if z is None:

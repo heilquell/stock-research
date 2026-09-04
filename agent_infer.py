@@ -116,6 +116,12 @@ def entscheidung(koepfe: dict[str, np.ndarray]) -> dict:
     i_s = int(np.argmax(koepfe["strike"]))
     i_l = int(np.argmax(koepfe["laufzeit"]))
     i_k = int(np.argmax(koepfe["kontrakte"]))
+    # Die vier Koepfe sind unabhaengig (faktorisierte Politik), also ist das
+    # Produkt die Wahrscheinlichkeit der VOLLSTAENDIGEN Order. Bezugspunkt ist
+    # nicht 1/6 wie beim Aktionskopf, sondern 1/486 = 0,2 % -- so viel gaebe
+    # blindes Raten. Deshalb steht daneben, um das Wievielfache davon.
+    p_ges = (float(koepfe["aktion"][i_a]) * float(koepfe["strike"][i_s])
+             * float(koepfe["laufzeit"][i_l]) * float(koepfe["kontrakte"][i_k]))
     return {
         "aktion": AKTIONEN[i_a],
         "aktion_p": float(koepfe["aktion"][i_a]),
@@ -125,6 +131,8 @@ def entscheidung(koepfe: dict[str, np.ndarray]) -> dict:
         "laufzeit_p": float(koepfe["laufzeit"][i_l]),
         "kontrakte": KONTRAKTE[i_k],
         "kontrakte_p": float(koepfe["kontrakte"][i_k]),
+        "p_gesamt": p_ges,
+        "p_gesamt_vs_zufall": p_ges * 486.0,
         # Flache Aktionsnummer wie im Training: a*81 + s*9 + l*3 + k
         "aktion_idx": i_a * 81 + i_s * 9 + i_l * 3 + i_k,
     }
