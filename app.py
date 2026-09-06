@@ -6,6 +6,15 @@ import os
 
 import streamlit as st
 
+# Muss der erste Streamlit-Aufruf sein. Ohne das nimmt Streamlit den Namen des
+# Einstiegspunkts als Titel -- dann steht im Browser-Reiter "app", bis die
+# Unterseite ihren eigenen Titel setzt.
+st.set_page_config(
+    page_title="Stock Research",
+    page_icon="📊",
+    layout="wide",
+)
+
 st.markdown(
     """
     <style>
