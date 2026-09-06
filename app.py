@@ -31,8 +31,15 @@ SEITEN = [
     ("main.py", "Home", "🏠"),
     ("pages/1_📊_Crossover.py", "Crossover", "📊"),
     ("pages/2_🧮_Optionen.py", "Optionen", "🧮"),
-    ("pages/3_🤖_Agent.py", "Agent", "🤖"),
 ]
+
+# Bewusst stillgelegt: die Datei bleibt liegen, die Seite ist aber nicht
+# erreichbar. Der Waechter unten soll deshalb nicht Alarm schlagen.
+# 3_🤖_Agent.py -- 05.09.2026 abgeschaltet: das Modell hat gelernt, einen
+# Bepreisungsfehler des Simulators auszunutzen (Rueckschau-Vola statt
+# Prognose), und ist dabei auf eine einzige Aktion zusammengefallen.
+# Wieder anschalten = Zeile oben zurueck in SEITEN + Link in main.py.
+STILLGELEGT = {"pages/3_🤖_Agent.py"}
 
 # Wer st.navigation benutzt, schaltet die dateibasierte Navigation ab: eine
 # Datei unter pages/ existiert fuer Streamlit dann nur, wenn sie oben steht.
@@ -40,7 +47,8 @@ SEITEN = [
 # Traceback mitten auf der Seite. Deshalb der Abgleich beim Start.
 _ordner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pages")
 _vorhanden = {"pages/" + n for n in os.listdir(_ordner) if n.endswith(".py")}
-_nicht_registriert = sorted(_vorhanden - {pfad for pfad, _, _ in SEITEN})
+_bekannt = {pfad for pfad, _, _ in SEITEN} | STILLGELEGT
+_nicht_registriert = sorted(_vorhanden - _bekannt)
 if _nicht_registriert:
     st.error(
         "Nicht in app.py registriert und deshalb nicht erreichbar: "
