@@ -160,6 +160,66 @@ Einstellbar: Mindestscore und Anzahl der angezeigten Kandidaten jeweils per Slid
 
 ---
 
+## put_screener.py – Put-Schreiber-Liste (Seite 🛡️ Puts)
+
+Beantwortet eine einzige Frage: Auf welche fundamental soliden Titel kann man
+einen weit aus dem Geld liegenden Put verkaufen, ohne dass das historisch oft
+schiefgegangen wäre — und was bleibt nach Steuer?
+
+**Ablauf in vier Schritten** (Kommandozeile, nicht in der Seite):
+
+```
+python put_screener.py --universum     # Indexmitglieder von Wikipedia
+python put_screener.py --fundamental   # Cashflow/Verschuldung je Titel (~15 min)
+python put_screener.py --historie      # Kurse 2005–2010 der Kandidaten (einmalig)
+python put_screener.py --rechnen       # Backtest, rein lokal
+python put_screener.py --selbsttest    # 5 Fälle, ohne Netz
+```
+
+Die Seite rechnet nichts selbst, sie liest `put_ergebnis`. Vierhundert
+Kursreihen bei jedem Seitenaufruf durchzugehen wäre verschwendete Zeit für ein
+Ergebnis, das sich nur einmal täglich ändert.
+
+**Auswahl.** Universum S&P 500 (zum Nasdaq 100 gibt es auf Wikipedia keine
+maschinenlesbare Mitgliederliste mehr). Ausschluss bei negativem freiem
+Cashflow oder Nettoverschuldung über dem Vierfachen des EBITDA. Fehlende Werte
+schließen ebenfalls aus — ein Filter, der bei Datenlücken durchwinkt, ist
+keiner.
+
+**Backtest.** An jedem Monatsanfang eine gedachte Position, Ausübungspreis 15
+bzw. 20 % unter dem damaligen Kurs, Vergleich mit dem Kurs 3 bzw. 6 Monate
+später (gezählt in Handelstagen, nicht Kalendertagen — die Kursreihe kennt nur
+Handelstage). Erfasst werden Trefferquote, mittlerer und schlimmster Rückgang
+im Fehlerfall.
+
+**Warum das Vertrauensintervall auf einer kleineren Zahl steht.** Monatliche
+Startpunkte bei drei Monaten Laufzeit überlappen sich zu zwei Dritteln.
+Benachbarte Fälle teilen sich den größten Teil ihres Kursverlaufs und sind
+keine unabhängigen Versuche. Das Intervall wird deshalb auf
+`Fälle ÷ Laufzeit in Monaten` gerechnet. Wilson statt Normalnäherung: bei
+Quoten nahe 100 % ragt letztere über 1 hinaus.
+
+**Rendite und Steuer.** Bezugsgröße ist `Ausübungspreis × 100` — so viel muss
+bereitliegen, wenn der Put bar besichert ist. Geschriebene Puts sind
+unverbriefte Derivate (§ 27a Abs 2 Z 7 EStG) und damit tarifsteuerpflichtig,
+nicht mit 27,5 % endbesteuert; die Seite zeigt beide Renditen.
+
+**Optionskette** nur auf Knopfdruck für einen einzelnen Titel. An derselben
+Bibliothek und IP hängt `cron_update.py` für 3.200 Titel; sechzig Kettenabrufe
+am Stück wären genau die Last, die zur Drosselung führt.
+
+### Eigene Tabellen
+
+| Tabelle | Inhalt |
+|---|---|
+| `put_universum` | Indexmitglieder, geschnitten mit `stock_list` |
+| `put_fundamental` | freier Cashflow, Nettoverschuldung, EBITDA, Quote |
+| `put_hist` | Schlusskurse 2005–2010 — `stock_data` beginnt erst 2009-10-21, ohne diese Jahre fehlt der Crash 2008/09 |
+| `put_ergebnis` | fertiger Backtest je Titel und Kombination |
+
+Bewusst getrennt von `stock_data`: Der nächtliche Kurslauf bestimmt seinen
+Startpunkt aus dem letzten Eintrag und darf von dieser Seite nichts merken.
+
 ## Datenbankstruktur (SQLite)
 
 ### Tabelle `stock_data`
