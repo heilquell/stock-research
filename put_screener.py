@@ -366,10 +366,25 @@ def universum_laden(db_path: str | None = None) -> dict:
     # werden. Der Nasdaq 100 haette sie, ist aber nicht mehr maschinenlesbar
     # abrufbar. Die Merkliste steht in der Datenbank und nicht im Code: das
     # Repository ist oeffentlich, die gehandelten Basiswerte sind es nicht.
+    # Eigene Quellen ueberschreiben die Indexherkunft bewusst: Dass AMD im
+    # S&P 500 steht, ist die langweiligere Auskunft -- interessant ist, dass
+    # darauf schon 613 Optionsgeschaefte liefen.
     try:
         for (sym,) in conn.execute("SELECT DISTINCT symbol FROM option_watchlist"):
             if sym:
-                gefunden.setdefault(sym.strip().upper(), "MERKLISTE")
+                gefunden[sym.strip().upper()] = "MERKLISTE"
+    except sqlite3.OperationalError:
+        pass
+
+    # Und alles, worauf schon einmal Optionen gehandelt wurden. Die Tabelle
+    # fuellt ein Skript ausserhalb dieses Repositories aus der Broker-App --
+    # hier steht nur der Lesezugriff, und sie darf fehlen oder leer sein.
+    # Wer einen Titel schon gehandelt hat, will ihn in der Liste sehen, ganz
+    # gleich ob ein Index ihn fuehrt.
+    try:
+        for (sym,) in conn.execute("SELECT symbol FROM put_gehandelt"):
+            if sym:
+                gefunden[sym.strip().upper()] = "GEHANDELT"
     except sqlite3.OperationalError:
         pass
 
@@ -431,12 +446,32 @@ def fundamental_laden(symbols: list[str], db_path: str | None = None,
     return {"geschrieben": ok, "ohne_daten": leer}
 
 
-def kandidaten(conn: sqlite3.Connection) -> pd.DataFrame:
-    """Fundamental gesunde Titel des Universums.
+def fundamental_ok(fcf, quote) -> bool:
+    """Der Filter der Vorlage: positiver freier Cashflow, Schulden im Rahmen.
 
-    Wie in der Vorlage: negativer freier Cashflow oder Nettoverschuldung ueber
-    dem Vierfachen des EBITDA schliessen aus. Unbekannte Werte schliessen
-    ebenfalls aus -- siehe ``fundamental_laden``.
+    Unbekannte Werte gelten als nicht erfuellt -- ein Filter, der bei
+    Datenluecken durchwinkt, ist keiner.
+    """
+    if fcf is None or pd.isna(fcf) or fcf <= 0:
+        return False
+    if quote is None or pd.isna(quote):
+        return False
+    return quote <= MAX_NETTOSCHULDEN_EBITDA
+
+
+def kandidaten(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Was gerechnet wird -- mit Vermerk, ob es den Fundamentalfilter besteht.
+
+    Zwei Gruppen mit unterschiedlichem Anspruch:
+
+    * **Fremde Titel** (S&P 500) muessen den Filter bestehen, sonst haben sie
+      in einer Liste "solider Namen" nichts verloren.
+    * **Eigene Titel** -- Merkliste oder schon gehandelt -- werden immer
+      gerechnet. Wer auf einen Wert schon Optionen geschrieben hat, will
+      wissen, wie oft das historisch schiefgegangen waere, und nicht, dass
+      ein Filter ihn stillschweigend verschluckt hat. Sie bleiben aber als
+      ``fundamental_ok = False`` gekennzeichnet, damit die Seite den
+      Unterschied zeigen kann.
     """
     df = pd.read_sql_query(
         "SELECT f.symbol, f.name, f.sektor, f.fcf, f.schulden_ebitda, f.kurs, "
@@ -445,9 +480,10 @@ def kandidaten(conn: sqlite3.Connection) -> pd.DataFrame:
         conn)
     if df.empty:
         return df
-    return df[(df["fcf"] > 0) &
-              (df["schulden_ebitda"].notna()) &
-              (df["schulden_ebitda"] <= MAX_NETTOSCHULDEN_EBITDA)].copy()
+    df["fundamental_ok"] = [fundamental_ok(c, q)
+                            for c, q in zip(df["fcf"], df["schulden_ebitda"])]
+    eigen = df["quelle"].isin(("MERKLISTE", "GEHANDELT"))
+    return df[df["fundamental_ok"] | eigen].copy()
 
 
 def alles_rechnen(db_path: str | None = None, nur: list[str] | None = None) -> dict:
@@ -492,12 +528,15 @@ def rangliste(conn: sqlite3.Connection, kombi: str = "15/3") -> pd.DataFrame:
     andere auf 25 eigenstaendigen Zeitraeumen beruht.
     """
     df = pd.read_sql_query(
-        "SELECT e.*, f.name, f.sektor, f.schulden_ebitda, u.quelle "
+        "SELECT e.*, f.name, f.sektor, f.fcf, f.schulden_ebitda, u.quelle "
         "FROM put_ergebnis e "
         "LEFT JOIN put_fundamental f ON f.symbol = e.symbol "
         "LEFT JOIN put_universum u ON u.symbol = e.symbol "
         "WHERE e.kombi = ? ORDER BY e.p_ausuebung, e.ci_lo DESC",
         conn, params=(kombi,))
+    if not df.empty:
+        df["fundamental_ok"] = [fundamental_ok(c, q) for c, q in
+                                zip(df["fcf"], df["schulden_ebitda"])]
     return df
 
 
@@ -593,18 +632,25 @@ def _selbsttest() -> int:
 
 
 def merkliste_status(conn: sqlite3.Connection) -> pd.DataFrame:
-    """Warum ein Titel der eigenen Merkliste in der Liste fehlt.
+    """Warum ein eigener Titel -- Merkliste oder schon gehandelt -- fehlt.
 
     Ohne diese Auskunft endet jede Luecke in derselben Frage -- "warum sehe
     ich ASML nicht?" -- und die Antwort ist jedes Mal eine andere: kein
     Kursverlauf, fundamental ausgeschlossen, oder schlicht noch nicht
     gerechnet. Die Tabelle beantwortet sie von selbst.
     """
-    try:
-        merk = pd.read_sql_query(
-            "SELECT DISTINCT symbol FROM option_watchlist", conn)
-    except Exception:
+    teile = []
+    for sql, woher in (("SELECT DISTINCT symbol FROM option_watchlist", "Merkliste"),
+                       ("SELECT symbol FROM put_gehandelt", "gehandelt")):
+        try:
+            d = pd.read_sql_query(sql, conn)
+            d["woher"] = woher
+            teile.append(d)
+        except Exception:
+            continue
+    if not teile:
         return pd.DataFrame()
+    merk = pd.concat(teile).drop_duplicates(subset="symbol", keep="last")
     if merk.empty:
         return merk
     zeilen = []
@@ -618,6 +664,8 @@ def merkliste_status(conn: sqlite3.Connection) -> pd.DataFrame:
             "SELECT count(*) FROM put_ergebnis WHERE symbol = ?", (sym,)).fetchone()[0]
         if gerechnet:
             grund = "in der Liste"
+            if f is not None and not fundamental_ok(f[0], f[1]):
+                grund = "in der Liste (Fundamentalfilter nicht bestanden)"
         elif not hat_kurse:
             grund = "keine Kursreihe in der Datenbank"
         elif f is None:
@@ -631,6 +679,7 @@ def merkliste_status(conn: sqlite3.Connection) -> pd.DataFrame:
         else:
             grund = "gefiltert — noch nicht gerechnet"
         zeilen.append({"symbol": sym, "name": (f[2] if f else None),
+                       "woher": merk.loc[merk["symbol"] == sym, "woher"].iloc[0],
                        "status": grund})
     return pd.DataFrame(zeilen).sort_values(["status", "symbol"])
 

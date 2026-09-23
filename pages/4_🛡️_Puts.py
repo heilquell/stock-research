@@ -91,12 +91,33 @@ nur_belastbar = st.checkbox(
 if nur_belastbar:
     df = df[df["eigenstaendig"] >= ps.MIN_EIGENSTAENDIG]
 
-QUELLE_NAMEN = {"SP500": "S&P 500", "MERKLISTE": "Merkliste"}
+QUELLE_NAMEN = {"SP500": "S&P 500", "MERKLISTE": "Merkliste",
+                "GEHANDELT": "selbst gehandelt"}
+
+# Eigene Titel stehen auch dann in der Tabelle, wenn sie den Fundamentalfilter
+# nicht bestehen -- wer auf einen Wert schon Optionen geschrieben hat, will
+# die Zahlen sehen und nicht, dass ein Filter ihn stillschweigend verschluckt.
+# Sichtbar bleibt der Unterschied trotzdem.
+eigene = df["quelle"].isin(("MERKLISTE", "GEHANDELT"))
+if eigene.any() and st.checkbox(
+        f"Nur eigene Titel — Merkliste und schon gehandelt ({int(eigene.sum())})",
+        value=False):
+    df = df[eigene]
+    eigene = df["quelle"].isin(("MERKLISTE", "GEHANDELT"))
+schwach = eigene & ~df["fundamental_ok"]
+if schwach.any():
+    if not st.checkbox(
+            f"Eigene Titel mitzeigen, die den Fundamentalfilter nicht bestehen "
+            f"({int(schwach.sum())})", value=True,
+            help="Meist hohe Verschuldung (REITs, BDCs) oder negativer freier "
+                 "Cashflow. Die Backtest-Zahlen stimmen trotzdem."):
+        df = df[~schwach]
 
 anzeige = pd.DataFrame({
     "Symbol": df["symbol"],
     "Name": df["name"],
     "Quelle": df["quelle"].map(QUELLE_NAMEN).fillna("—"),
+    "Fundamental": ["✓" if ok else "⚠" for ok in df["fundamental_ok"]],
     "Sektor": df["sektor"],
     "Kurs": df["kurs"].round(2),
     "gehalten": (100 * (1 - df["p_ausuebung"])).round(1),
@@ -121,6 +142,11 @@ st.dataframe(
             "Ø Rückgang %", help="Wie weit der Kurs unter dem Ausübungspreis "
                                  "lag, wenn er darunter lag."),
         "schlimmster Fall": st.column_config.NumberColumn("max. %"),
+        "Fundamental": st.column_config.TextColumn(
+            "Fund.", help="✓ positiver freier Cashflow und Nettoverschuldung "
+                          "≤ 4× EBITDA. ⚠ eigener Titel, der das nicht "
+                          "erfüllt — bei REITs und BDCs ist hohe Verschuldung "
+                          "allerdings der Normalzustand, kein Warnzeichen."),
     })
 
 st.caption(
@@ -149,8 +175,10 @@ if not merk.empty:
         st.caption(
             "Der S&P 500 nimmt keine ausländischen Emittenten auf — ASML, "
             "Novo Nordisk oder AstraZeneca können dort nicht stehen, obwohl "
-            "auf sie Optionen gehandelt werden. Deshalb kommt die eigene "
-            "Merkliste als zweite Quelle dazu. Wer hier trotzdem fehlt, "
+            "auf sie Optionen gehandelt werden. Deshalb kommen die eigene "
+            "Merkliste und alle schon gehandelten Basiswerte als zweite "
+            "Quelle dazu; sie werden auch dann gerechnet, wenn sie den "
+            "Fundamentalfilter nicht bestehen. Wer hier trotzdem fehlt, "
             "fehlt aus einem genannten Grund.")
         st.dataframe(merk, use_container_width=True, hide_index=True)
 
@@ -206,9 +234,12 @@ if holen and symbol:
 st.divider()
 with st.expander("Wie diese Liste entsteht — und was sie nicht kann"):
     st.markdown(f"""
-**Die Auswahl.** Universum ist der S&P 500. Es fliegt raus, wer negativen
-freien Cashflow hat oder dessen Nettoverschuldung mehr als das Vierfache des
-EBITDA beträgt. Übrig bleiben Namen, die man notfalls auch halten würde.
+**Die Auswahl.** Universum ist der S&P 500, dazu die eigene Merkliste und
+jeder Basiswert, auf den schon einmal Optionen gehandelt wurden. Aus dem
+S&P 500 fliegt raus, wer negativen freien Cashflow hat oder dessen
+Nettoverschuldung mehr als das Vierfache des EBITDA beträgt — übrig bleiben
+Namen, die man notfalls auch halten würde. Eigene Titel werden immer
+gerechnet und mit ⚠ gekennzeichnet, wenn sie den Filter reißen.
 
 **Der Backtest.** An jedem Monatsanfang der verfügbaren Historie wird eine
 gedachte Position eröffnet: Ausübungspreis 15 bzw. 20 % unter dem damaligen
