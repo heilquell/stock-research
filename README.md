@@ -18,6 +18,39 @@ Streamlit-Tool für technische Analyse von (~3.500 des Autors) Wertpapieren — 
 |---|---|
 | 📊 Crossover | Aktien-Chart mit Candlesticks, MA-9/MA-21 (oder Vielfache), Prophet-Forecast 1-10 Jahre, Buy/Sell-Signal-Scanner mit Filtern (MA-Trend, Favoriten), Fundamental-Screener |
 | 🧮 Optionen | Rollen (Credit je Verfallstermin, Ertrag pro Tag), Preis & Griechen, Optionskette, implizite Volatilität — samt Andienungswahrscheinlichkeit |
+| 🛡️ Puts | Fundamental gefilterte S&P-500-Titel, Backtest weit aus dem Geld liegender Puts (−15/−20 %, 3/6 Monate) mit Vertrauensintervall, Prämie je Kontrakt und Rendite p. a. **vor und nach Tarifsteuer** |
+
+### Put-Schreiber-Liste
+
+Gerechnet in `put_screener.py` (streamlit-frei, Selbsttest über
+`python put_screener.py --selbsttest`). Universum ist der S&P 500; es fliegt
+raus, wer negativen freien Cashflow hat oder dessen Nettoverschuldung mehr als
+das Vierfache des EBITDA beträgt. Für die übrigen wird an jedem Monatsanfang
+eine gedachte Position eröffnet und mit dem Kurs 3 bzw. 6 Monate später
+verglichen.
+
+Drei Dinge, die kommerzielle Varianten dieser Liste weglassen:
+
+- **Das Vertrauensintervall wird auf der effektiven Fallzahl gerechnet.**
+  Monatliche Startpunkte bei drei Monaten Laufzeit überlappen sich zu zwei
+  Dritteln; aus 200 Beobachtungen werden rund 67 eigenständige Zeiträume. Wer
+  das Intervall auf der rohen Zahl rechnet, verkauft Genauigkeit, die er nicht
+  hat. Verwendet wird Wilson, nicht die Normalnäherung — bei Quoten nahe 100 %
+  ragt letztere über 1 hinaus.
+- **Die Rendite steht neben der Prämie.** 57,50 $ Prämie auf einen bar
+  besicherten Put mit Ausübungspreis 75 sind 0,77 % über 87 Tage, also 3,2 %
+  im Jahr. Erst diese Zahl macht die Liste zur Entscheidungsgrundlage.
+- **Die Steuer ist eingebaut.** Geschriebene Puts sind unverbriefte Derivate
+  (§ 27a Abs 2 Z 7 EStG): Tarif statt 27,5 %, kein Ausgleich mit dem
+  Aktien-Topf. Aus 3,2 % p. a. werden bei 42 % Grenzsteuer 1,9 %.
+
+Eigene Tabellen (`put_hist`, `put_fundamental`, `put_universum`,
+`put_ergebnis`), damit der nächtliche Kurslauf unberührt bleibt. `put_hist`
+ist nötig, weil `stock_data` erst 2009 beginnt — ohne die Jahre davor fehlt
+der Crash 2008/09 und jede Quote fiele zu schön aus.
+
+Die Optionskette wird einzeln und nur auf Knopfdruck geholt: An derselben
+Bibliothek und IP hängt der Kurslauf für 3.200 Titel.
 
 ### Optionsrechner
 

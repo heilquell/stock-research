@@ -40,6 +40,7 @@ SEITEN = [
     ("main.py", "Home", "🏠"),
     ("pages/1_📊_Crossover.py", "Crossover", "📊"),
     ("pages/2_🧮_Optionen.py", "Optionen", "🧮"),
+    ("pages/4_🛡️_Puts.py", "Puts", "🛡️"),
 ]
 
 # Bewusst stillgelegt: die Datei bleibt liegen, die Seite ist aber nicht
