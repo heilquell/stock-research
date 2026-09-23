@@ -23,7 +23,10 @@ Streamlit-Tool für technische Analyse von (~3.500 des Autors) Wertpapieren — 
 ### Put-Schreiber-Liste
 
 Gerechnet in `put_screener.py` (streamlit-frei, Selbsttest über
-`python put_screener.py --selbsttest`). Universum ist der S&P 500; es fliegt
+`python put_screener.py --selbsttest`). Universum ist der S&P 500 **plus die
+eigene Options-Merkliste** aus der Datenbank — der Index nimmt keine
+ausländischen Emittenten auf, ASML oder Novo Nordisk können dort nicht stehen,
+obwohl auf sie Optionen gehandelt werden. Es fliegt
 raus, wer negativen freien Cashflow hat oder dessen Nettoverschuldung mehr als
 das Vierfache des EBITDA beträgt. Für die übrigen wird an jedem Monatsanfang
 eine gedachte Position eröffnet und mit dem Kurs 3 bzw. 6 Monate später

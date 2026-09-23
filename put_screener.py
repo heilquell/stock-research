@@ -359,6 +359,20 @@ def universum_laden(db_path: str | None = None) -> dict:
 
     conn = verbindung(db_path)
     tabellen_anlegen(conn)
+
+    # Dazu die eigene Options-Merkliste. Der S&P 500 nimmt keine
+    # auslaendischen Emittenten auf -- ASML, Novo Nordisk oder AstraZeneca
+    # koennen dort gar nicht stehen, obwohl auf sie Optionen gehandelt
+    # werden. Der Nasdaq 100 haette sie, ist aber nicht mehr maschinenlesbar
+    # abrufbar. Die Merkliste steht in der Datenbank und nicht im Code: das
+    # Repository ist oeffentlich, die gehandelten Basiswerte sind es nicht.
+    try:
+        for (sym,) in conn.execute("SELECT DISTINCT symbol FROM option_watchlist"):
+            if sym:
+                gefunden.setdefault(sym.strip().upper(), "MERKLISTE")
+    except sqlite3.OperationalError:
+        pass
+
     bekannt = {r[0] for r in conn.execute("SELECT symbol FROM stock_list")}
     stand = date.today().isoformat()
     zeilen = [(s, q, stand) for s, q in gefunden.items() if s in bekannt]
@@ -478,8 +492,10 @@ def rangliste(conn: sqlite3.Connection, kombi: str = "15/3") -> pd.DataFrame:
     andere auf 25 eigenstaendigen Zeitraeumen beruht.
     """
     df = pd.read_sql_query(
-        "SELECT e.*, f.name, f.sektor, f.schulden_ebitda "
-        "FROM put_ergebnis e LEFT JOIN put_fundamental f ON f.symbol = e.symbol "
+        "SELECT e.*, f.name, f.sektor, f.schulden_ebitda, u.quelle "
+        "FROM put_ergebnis e "
+        "LEFT JOIN put_fundamental f ON f.symbol = e.symbol "
+        "LEFT JOIN put_universum u ON u.symbol = e.symbol "
         "WHERE e.kombi = ? ORDER BY e.p_ausuebung, e.ci_lo DESC",
         conn, params=(kombi,))
     return df
@@ -576,6 +592,49 @@ def _selbsttest() -> int:
     return fehler
 
 
+def merkliste_status(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Warum ein Titel der eigenen Merkliste in der Liste fehlt.
+
+    Ohne diese Auskunft endet jede Luecke in derselben Frage -- "warum sehe
+    ich ASML nicht?" -- und die Antwort ist jedes Mal eine andere: kein
+    Kursverlauf, fundamental ausgeschlossen, oder schlicht noch nicht
+    gerechnet. Die Tabelle beantwortet sie von selbst.
+    """
+    try:
+        merk = pd.read_sql_query(
+            "SELECT DISTINCT symbol FROM option_watchlist", conn)
+    except Exception:
+        return pd.DataFrame()
+    if merk.empty:
+        return merk
+    zeilen = []
+    for sym in merk["symbol"]:
+        f = conn.execute(
+            "SELECT fcf, schulden_ebitda, name FROM put_fundamental "
+            "WHERE symbol = ?", (sym,)).fetchone()
+        hat_kurse = conn.execute(
+            "SELECT 1 FROM stock_data WHERE symbol = ? LIMIT 1", (sym,)).fetchone()
+        gerechnet = conn.execute(
+            "SELECT count(*) FROM put_ergebnis WHERE symbol = ?", (sym,)).fetchone()[0]
+        if gerechnet:
+            grund = "in der Liste"
+        elif not hat_kurse:
+            grund = "keine Kursreihe in der Datenbank"
+        elif f is None:
+            grund = "Fundamentaldaten fehlen — noch nicht abgerufen"
+        elif f[0] is None or f[0] <= 0:
+            grund = "freier Cashflow negativ oder unbekannt"
+        elif f[1] is None:
+            grund = "Nettoverschuldung/EBITDA unbekannt"
+        elif f[1] > MAX_NETTOSCHULDEN_EBITDA:
+            grund = f"Nettoverschuldung {f[1]:.1f}× EBITDA (Grenze {MAX_NETTOSCHULDEN_EBITDA:.0f}×)"
+        else:
+            grund = "gefiltert — noch nicht gerechnet"
+        zeilen.append({"symbol": sym, "name": (f[2] if f else None),
+                       "status": grund})
+    return pd.DataFrame(zeilen).sort_values(["status", "symbol"])
+
+
 def main(argv: list[str] | None = None) -> int:
     """Kommandozeile -- der Nachtlauf ruft genau diese Schritte auf.
 
@@ -592,6 +651,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Indexmitglieder neu holen")
     ap.add_argument("--fundamental", action="store_true",
                     help="Cashflow/Verschuldung neu holen (langsam, woechentlich)")
+    ap.add_argument("--nur-neu", action="store_true",
+                    help="mit --fundamental: nur Titel ohne gespeicherte Werte")
     ap.add_argument("--historie", action="store_true",
                     help="Kurse 2005-2010 fuer Kandidaten nachladen (einmalig)")
     ap.add_argument("--rechnen", action="store_true",
@@ -611,7 +672,12 @@ def main(argv: list[str] | None = None) -> int:
     if a.fundamental:
         syms = [r[0] for r in conn.execute(
             "SELECT symbol FROM put_universum ORDER BY symbol")]
-        print("Fundamentaldaten:", fundamental_laden(syms))
+        if a.nur_neu:
+            # Nach einer Erweiterung des Universums waeren sonst 490
+            # Abrufe faellig, obwohl zwanzig fehlen.
+            da = {r[0] for r in conn.execute("SELECT symbol FROM put_fundamental")}
+            syms = [s for s in syms if s not in da]
+        print(f"Fundamentaldaten fuer {len(syms)} Titel:", fundamental_laden(syms))
     if a.historie:
         # Nur fuer Kandidaten: Altdaten fuer Titel zu laden, die der
         # Fundamentalfilter ohnehin aussortiert, waeren verschenkte Abrufe.

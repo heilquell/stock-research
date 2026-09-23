@@ -181,7 +181,13 @@ Kursreihen bei jedem Seitenaufruf durchzugehen wäre verschwendete Zeit für ein
 Ergebnis, das sich nur einmal täglich ändert.
 
 **Auswahl.** Universum S&P 500 (zum Nasdaq 100 gibt es auf Wikipedia keine
-maschinenlesbare Mitgliederliste mehr). Ausschluss bei negativem freiem
+maschinenlesbare Mitgliederliste mehr) **plus die eigene Options-Merkliste**
+aus `option_watchlist`. Letztere ist kein Luxus: Der S&P 500 nimmt keine
+ausländischen Emittenten auf, ASML, Novo Nordisk oder AstraZeneca können dort
+nicht stehen. Die Merkliste steht in der Datenbank und nicht im Code — das
+Repository ist öffentlich, die gehandelten Basiswerte sind es nicht. Wer aus
+der Merkliste trotzdem nicht in der Tabelle steht, wird auf der Seite mit
+Grund aufgeführt. Ausschluss bei negativem freiem
 Cashflow oder Nettoverschuldung über dem Vierfachen des EBITDA. Fehlende Werte
 schließen ebenfalls aus — ein Filter, der bei Datenlücken durchwinkt, ist
 keiner.

@@ -91,9 +91,12 @@ nur_belastbar = st.checkbox(
 if nur_belastbar:
     df = df[df["eigenstaendig"] >= ps.MIN_EIGENSTAENDIG]
 
+QUELLE_NAMEN = {"SP500": "S&P 500", "MERKLISTE": "Merkliste"}
+
 anzeige = pd.DataFrame({
     "Symbol": df["symbol"],
     "Name": df["name"],
+    "Quelle": df["quelle"].map(QUELLE_NAMEN).fillna("—"),
     "Sektor": df["sektor"],
     "Kurs": df["kurs"].round(2),
     "gehalten": (100 * (1 - df["p_ausuebung"])).round(1),
@@ -121,9 +124,35 @@ st.dataframe(
     })
 
 st.caption(
-    f"Stand {stand} · {n_titel} Titel · Universum S&P 500, gefiltert auf "
-    "positiven freien Cashflow und Nettoverschuldung ≤ 4× EBITDA."
+    f"Stand {stand} · {n_titel} Titel · Universum S&P 500 plus die eigene "
+    "Options-Merkliste, gefiltert auf positiven freien Cashflow und "
+    "Nettoverschuldung ≤ 4× EBITDA."
 )
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _merkliste() -> pd.DataFrame:
+    conn = ps.verbindung()
+    try:
+        return ps.merkliste_status(conn)
+    finally:
+        conn.close()
+
+
+merk = _merkliste()
+if not merk.empty:
+    fehlen = merk[merk["status"] != "in der Liste"]
+    titel = ("Eigene Merkliste — "
+             + (f"{len(fehlen)} von {len(merk)} Titeln fehlen in der Tabelle"
+                if len(fehlen) else "alle Titel sind in der Tabelle"))
+    with st.expander(titel):
+        st.caption(
+            "Der S&P 500 nimmt keine ausländischen Emittenten auf — ASML, "
+            "Novo Nordisk oder AstraZeneca können dort nicht stehen, obwohl "
+            "auf sie Optionen gehandelt werden. Deshalb kommt die eigene "
+            "Merkliste als zweite Quelle dazu. Wer hier trotzdem fehlt, "
+            "fehlt aus einem genannten Grund.")
+        st.dataframe(merk, use_container_width=True, hide_index=True)
 
 # --------------------------------------------------------------------------
 # Praemie und Rendite fuer einen Titel
