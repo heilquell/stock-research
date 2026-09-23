@@ -181,23 +181,33 @@ Kursreihen bei jedem Seitenaufruf durchzugehen wäre verschwendete Zeit für ein
 Ergebnis, das sich nur einmal täglich ändert.
 
 **Auswahl.** Universum S&P 500 (zum Nasdaq 100 gibt es auf Wikipedia keine
-maschinenlesbare Mitgliederliste mehr). Ausschluss bei negativem freiem
+maschinenlesbare Mitgliederliste mehr) **plus die eigene Options-Merkliste**
+aus `option_watchlist`. Letztere ist kein Luxus: Der S&P 500 nimmt keine
+ausländischen Emittenten auf, ASML, Novo Nordisk oder AstraZeneca können dort
+nicht stehen. Die Merkliste steht in der Datenbank und nicht im Code — das
+Repository ist öffentlich, die gehandelten Basiswerte sind es nicht. Wer aus
+der Merkliste trotzdem nicht in der Tabelle steht, wird auf der Seite mit
+Grund aufgeführt. Ausschluss bei negativem freiem
 Cashflow oder Nettoverschuldung über dem Vierfachen des EBITDA. Fehlende Werte
 schließen ebenfalls aus — ein Filter, der bei Datenlücken durchwinkt, ist
 keiner.
 
-**Backtest.** An jedem Monatsanfang eine gedachte Position, Ausübungspreis 15
-bzw. 20 % unter dem damaligen Kurs, Vergleich mit dem Kurs 3 bzw. 6 Monate
-später (gezählt in Handelstagen, nicht Kalendertagen — die Kursreihe kennt nur
-Handelstage). Erfasst werden Trefferquote, mittlerer und schlimmster Rückgang
-im Fehlerfall.
+**Backtest.** Jede Woche eine gedachte Position, Ausübungspreis 5, 7, 10, 15
+oder 20 % unter dem damaligen Kurs, Vergleich mit dem Kurs 5, 10, 21, 63 oder
+126 Handelstage später (Handelstage, nicht Kalendertage — die Kursreihe kennt
+nur Handelstage; eine Woche sind dort fünf Zeilen). Das volle Kreuz sind 25
+Kombinationen je Titel. Erfasst werden Trefferquote, mittlerer und
+schlimmster Rückgang im Fehlerfall.
 
-**Warum das Vertrauensintervall auf einer kleineren Zahl steht.** Monatliche
-Startpunkte bei drei Monaten Laufzeit überlappen sich zu zwei Dritteln.
-Benachbarte Fälle teilen sich den größten Teil ihres Kursverlaufs und sind
-keine unabhängigen Versuche. Das Intervall wird deshalb auf
-`Fälle ÷ Laufzeit in Monaten` gerechnet. Wilson statt Normalnäherung: bei
-Quoten nahe 100 % ragt letztere über 1 hinaus.
+**Warum das Vertrauensintervall auf einer kleineren Zahl steht.**
+Wöchentliche Startpunkte bei drei Monaten Laufzeit überlappen sich zu zwölf
+Dreizehnteln. Benachbarte Fälle teilen sich den größten Teil ihres
+Kursverlaufs und sind keine unabhängigen Versuche. Das Intervall wird deshalb
+auf `Fälle × Startabstand ÷ Laufzeit` gerechnet. Bei einer Woche Laufzeit und
+wöchentlichem Start überlappt nichts — dort sind beide Zahlen gleich, und das
+Intervall ist entsprechend eng (gut 1.000 eigenständige Fälle über 20 Jahre).
+Wilson statt Normalnäherung: bei Quoten nahe 100 % ragt letztere über 1
+hinaus.
 
 **Rendite und Steuer.** Bezugsgröße ist `Ausübungspreis × 100` — so viel muss
 bereitliegen, wenn der Put bar besichert ist. Geschriebene Puts sind

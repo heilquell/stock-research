@@ -32,16 +32,44 @@ import os
 import sqlite3
 from datetime import date, timedelta
 
+import numpy as np
 import pandas as pd
 
 DB_PATH = os.environ.get("STOCKS_DB", "/data/stocks.db")
 
-# Die drei Kombinationen der Vorlage: Abstand zum Kurs und Laufzeit in Monaten.
-KOMBINATIONEN: tuple[tuple[int, int], ...] = ((15, 3), (15, 6), (20, 6))
+# Abstaende zum Kurs (Prozent) und Laufzeiten (Handelstage). Gerechnet wird
+# das volle Kreuz: 5 x 5 = 25 Kombinationen je Titel. Die Vorlage kennt nur
+# drei (15/3M, 15/6M, 20/6M) -- fuer das, was hier tatsaechlich gehandelt
+# wird, sind kurze Laufzeiten und kleine Abstaende die wichtigeren Felder.
+ABSTAENDE: tuple[int, ...] = (5, 7, 10, 15, 20)
 
-# Handelstage je Monat -- gebraucht, um vom Startpunkt zum Verfall zu zaehlen.
-# Kalendertage waeren ungenau, weil die Kursreihe nur Handelstage kennt.
-HANDELSTAGE_MONAT = 21
+# Laufzeit in HANDELSTAGEN, nicht Kalendertagen: Die Kursreihe kennt nur
+# Handelstage, und eine Woche sind dort fuenf Zeilen. Der Text daneben ist
+# die uebliche Bezeichnung.
+LAUFZEITEN: tuple[tuple[int, str], ...] = (
+    (5, "1 Woche"), (10, "2 Wochen"), (21, "1 Monat"),
+    (63, "3 Monate"), (126, "6 Monate"),
+)
+
+# Abstand zwischen zwei gedachten Startpunkten, ebenfalls in Handelstagen.
+# Woechentlich statt monatlich: Bei einer Woche Laufzeit waeren monatliche
+# Starts eine Stichprobe von einem Fuenftel der moeglichen Faelle, und gerade
+# die kurzen Laufzeiten sind hier die interessanten.
+START_ABSTAND = 5
+
+KOMBINATIONEN: tuple[tuple[int, int], ...] = tuple(
+    (a, tage) for a in ABSTAENDE for tage, _ in LAUFZEITEN)
+
+LAUFZEIT_NAMEN = {tage: name for tage, name in LAUFZEITEN}
+
+
+def kombi_schluessel(abstand_pct: int, tage: int) -> str:
+    """Schluessel in der Tabelle, z. B. "10/10d" -- Abstand und Handelstage."""
+    return f"{abstand_pct}/{tage}d"
+
+
+def kombi_name(abstand_pct: int, tage: int) -> str:
+    return f"{abstand_pct} % unter Kurs, {LAUFZEIT_NAMEN.get(tage, f'{tage} Tage')}"
 
 # Fundamentale Ausschlusskriterien (wie die Vorlage).
 MAX_NETTOSCHULDEN_EBITDA = 4.0
@@ -193,48 +221,48 @@ def wilson(treffer: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return (max(0.0, mitte - rand), min(1.0, mitte + rand))
 
 
-def backtest(kurse: pd.Series, abstand_pct: int, monate: int) -> dict:
+def backtest(kurse: pd.Series, abstand_pct: int, tage: int,
+             start_abstand: int = START_ABSTAND) -> dict:
     """Wie oft lag der Kurs bei Verfall unter dem Ausuebungspreis?
 
-    Nachgebaut wie in der Vorlage: an jedem Monatsanfang eine gedachte
-    Position, Ausuebungspreis ``abstand_pct`` Prozent unter dem damaligen
-    Kurs, Vergleich mit dem Kurs ``monate`` Monate spaeter.
+    Alle ``start_abstand`` Handelstage wird eine gedachte Position eroeffnet:
+    Ausuebungspreis ``abstand_pct`` Prozent unter dem damaligen Kurs,
+    Vergleich mit dem Kurs ``tage`` Handelstage spaeter.
 
     Zusaetzlich zur reinen Quote:
 
     * ``mittl_rueckgang`` -- wie tief der Kurs lag, *wenn* es schiefging.
       Die Quote allein verschweigt die Fallhoehe.
-    * ``eigenstaendig`` -- Zahl der sich nicht ueberlappenden Zeitraeume
-      (Beobachtungen geteilt durch die Laufzeit in Monaten). Auf dieser
-      kleineren Zahl steht das Vertrauensintervall, denn benachbarte
-      Startpunkte teilen sich den groessten Teil ihres Kursverlaufs und sind
-      keine unabhaengigen Versuche.
+    * ``eigenstaendig`` -- Zahl der sich nicht ueberlappenden Zeitraeume.
+      Startet man woechentlich und haelt drei Monate, teilen sich benachbarte
+      Faelle den groessten Teil ihres Kursverlaufs; unabhaengige Versuche sind
+      das nicht. Das Vertrauensintervall steht deshalb auf dieser kleineren
+      Zahl. Bei einer Woche Laufzeit und woechentlichem Start ueberlappt
+      nichts, dort sind beide Zahlen gleich.
+
+    Vektorisiert, weil 25 Kombinationen mal 400 Titel mal tausend Startpunkte
+    als Python-Schleife Minuten brauchen und als numpy-Ausdruck Sekunden.
     """
-    if kurse.empty:
+    if kurse.empty or len(kurse) <= tage + start_abstand:
         return {}
-    monatsanfang = kurse.resample("MS").first().dropna()
-    schritt = HANDELSTAGE_MONAT * monate
-    faktor = 1 - abstand_pct / 100.0
-
-    faelle, unter, rueckgaenge = 0, 0, []
-    idx = kurse.index
-    for tag, start_kurs in monatsanfang.items():
-        pos = idx.searchsorted(tag)
-        ziel = pos + schritt
-        if ziel >= len(kurse):
-            break
-        strike = float(start_kurs) * faktor
-        end_kurs = float(kurse.iloc[ziel])
-        faelle += 1
-        if end_kurs < strike:
-            unter += 1
-            rueckgaenge.append((strike - end_kurs) / strike * 100.0)
-
-    if not faelle:
+    arr = kurse.to_numpy(dtype=float)
+    starts = np.arange(0, len(arr) - tage, start_abstand)
+    if starts.size == 0:
         return {}
-    eigenstaendig = max(1, faelle // monate)
-    # Treffer auf die effektive Fallzahl herunterskaliert, sonst waere das
-    # Intervall wieder so schmal wie bei unabhaengigen Beobachtungen.
+    strikes = arr[starts] * (1 - abstand_pct / 100.0)
+    enden = arr[starts + tage]
+    unter_maske = enden < strikes
+    unter = int(unter_maske.sum())
+    faelle = int(starts.size)
+
+    if unter:
+        rueckgang = (strikes[unter_maske] - enden[unter_maske]) / strikes[unter_maske] * 100.0
+        mittel, schlimmst = float(rueckgang.mean()), float(rueckgang.max())
+    else:
+        mittel, schlimmst = 0.0, 0.0
+
+    ueberlappung = min(1.0, start_abstand / tage)
+    eigenstaendig = max(1, int(round(faelle * ueberlappung)))
     treffer_eff = round((faelle - unter) / faelle * eigenstaendig)
     lo, hi = wilson(treffer_eff, eigenstaendig)
     return {
@@ -245,11 +273,10 @@ def backtest(kurse: pd.Series, abstand_pct: int, monate: int) -> dict:
         "p_ausuebung": unter / faelle,
         "ci_lo": lo,
         "ci_hi": hi,
-        "mittl_rueckgang": (sum(rueckgaenge) / len(rueckgaenge)
-                            if rueckgaenge else 0.0),
-        "max_rueckgang": max(rueckgaenge) if rueckgaenge else 0.0,
-        "von": str(monatsanfang.index[0].date()),
-        "bis": str(monatsanfang.index[-1].date()),
+        "mittl_rueckgang": mittel,
+        "max_rueckgang": schlimmst,
+        "von": str(kurse.index[0].date()),
+        "bis": str(kurse.index[-1].date()),
     }
 
 
@@ -267,11 +294,11 @@ def profil(conn: sqlite3.Connection, symbol: str) -> dict:
     out = {"symbol": symbol, "kurs": float(kurse.iloc[-1]),
            "historie_ab": str(kurse.index[0].date()), "kombis": {}}
     quoten = []
-    for abstand, monate in KOMBINATIONEN:
-        b = backtest(kurse, abstand, monate)
+    for abstand, tage in KOMBINATIONEN:
+        b = backtest(kurse, abstand, tage)
         if not b:
             continue
-        out["kombis"][f"{abstand}/{monate}"] = b
+        out["kombis"][kombi_schluessel(abstand, tage)] = b
         quoten.append(b["p_ausuebung"])
     if not quoten:
         return {}
@@ -359,6 +386,35 @@ def universum_laden(db_path: str | None = None) -> dict:
 
     conn = verbindung(db_path)
     tabellen_anlegen(conn)
+
+    # Dazu die eigene Options-Merkliste. Der S&P 500 nimmt keine
+    # auslaendischen Emittenten auf -- ASML, Novo Nordisk oder AstraZeneca
+    # koennen dort gar nicht stehen, obwohl auf sie Optionen gehandelt
+    # werden. Der Nasdaq 100 haette sie, ist aber nicht mehr maschinenlesbar
+    # abrufbar. Die Merkliste steht in der Datenbank und nicht im Code: das
+    # Repository ist oeffentlich, die gehandelten Basiswerte sind es nicht.
+    # Eigene Quellen ueberschreiben die Indexherkunft bewusst: Dass AMD im
+    # S&P 500 steht, ist die langweiligere Auskunft -- interessant ist, dass
+    # darauf schon 613 Optionsgeschaefte liefen.
+    try:
+        for (sym,) in conn.execute("SELECT DISTINCT symbol FROM option_watchlist"):
+            if sym:
+                gefunden[sym.strip().upper()] = "MERKLISTE"
+    except sqlite3.OperationalError:
+        pass
+
+    # Und alles, worauf schon einmal Optionen gehandelt wurden. Die Tabelle
+    # fuellt ein Skript ausserhalb dieses Repositories aus der Broker-App --
+    # hier steht nur der Lesezugriff, und sie darf fehlen oder leer sein.
+    # Wer einen Titel schon gehandelt hat, will ihn in der Liste sehen, ganz
+    # gleich ob ein Index ihn fuehrt.
+    try:
+        for (sym,) in conn.execute("SELECT symbol FROM put_gehandelt"):
+            if sym:
+                gefunden[sym.strip().upper()] = "GEHANDELT"
+    except sqlite3.OperationalError:
+        pass
+
     bekannt = {r[0] for r in conn.execute("SELECT symbol FROM stock_list")}
     stand = date.today().isoformat()
     zeilen = [(s, q, stand) for s, q in gefunden.items() if s in bekannt]
@@ -417,12 +473,32 @@ def fundamental_laden(symbols: list[str], db_path: str | None = None,
     return {"geschrieben": ok, "ohne_daten": leer}
 
 
-def kandidaten(conn: sqlite3.Connection) -> pd.DataFrame:
-    """Fundamental gesunde Titel des Universums.
+def fundamental_ok(fcf, quote) -> bool:
+    """Der Filter der Vorlage: positiver freier Cashflow, Schulden im Rahmen.
 
-    Wie in der Vorlage: negativer freier Cashflow oder Nettoverschuldung ueber
-    dem Vierfachen des EBITDA schliessen aus. Unbekannte Werte schliessen
-    ebenfalls aus -- siehe ``fundamental_laden``.
+    Unbekannte Werte gelten als nicht erfuellt -- ein Filter, der bei
+    Datenluecken durchwinkt, ist keiner.
+    """
+    if fcf is None or pd.isna(fcf) or fcf <= 0:
+        return False
+    if quote is None or pd.isna(quote):
+        return False
+    return quote <= MAX_NETTOSCHULDEN_EBITDA
+
+
+def kandidaten(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Was gerechnet wird -- mit Vermerk, ob es den Fundamentalfilter besteht.
+
+    Zwei Gruppen mit unterschiedlichem Anspruch:
+
+    * **Fremde Titel** (S&P 500) muessen den Filter bestehen, sonst haben sie
+      in einer Liste "solider Namen" nichts verloren.
+    * **Eigene Titel** -- Merkliste oder schon gehandelt -- werden immer
+      gerechnet. Wer auf einen Wert schon Optionen geschrieben hat, will
+      wissen, wie oft das historisch schiefgegangen waere, und nicht, dass
+      ein Filter ihn stillschweigend verschluckt hat. Sie bleiben aber als
+      ``fundamental_ok = False`` gekennzeichnet, damit die Seite den
+      Unterschied zeigen kann.
     """
     df = pd.read_sql_query(
         "SELECT f.symbol, f.name, f.sektor, f.fcf, f.schulden_ebitda, f.kurs, "
@@ -431,9 +507,10 @@ def kandidaten(conn: sqlite3.Connection) -> pd.DataFrame:
         conn)
     if df.empty:
         return df
-    return df[(df["fcf"] > 0) &
-              (df["schulden_ebitda"].notna()) &
-              (df["schulden_ebitda"] <= MAX_NETTOSCHULDEN_EBITDA)].copy()
+    df["fundamental_ok"] = [fundamental_ok(c, q)
+                            for c, q in zip(df["fcf"], df["schulden_ebitda"])]
+    eigen = df["quelle"].isin(("MERKLISTE", "GEHANDELT"))
+    return df[df["fundamental_ok"] | eigen].copy()
 
 
 def alles_rechnen(db_path: str | None = None, nur: list[str] | None = None) -> dict:
@@ -478,17 +555,22 @@ def rangliste(conn: sqlite3.Connection, kombi: str = "15/3") -> pd.DataFrame:
     andere auf 25 eigenstaendigen Zeitraeumen beruht.
     """
     df = pd.read_sql_query(
-        "SELECT e.*, f.name, f.sektor, f.schulden_ebitda "
-        "FROM put_ergebnis e LEFT JOIN put_fundamental f ON f.symbol = e.symbol "
+        "SELECT e.*, f.name, f.sektor, f.fcf, f.schulden_ebitda, u.quelle "
+        "FROM put_ergebnis e "
+        "LEFT JOIN put_fundamental f ON f.symbol = e.symbol "
+        "LEFT JOIN put_universum u ON u.symbol = e.symbol "
         "WHERE e.kombi = ? ORDER BY e.p_ausuebung, e.ci_lo DESC",
         conn, params=(kombi,))
+    if not df.empty:
+        df["fundamental_ok"] = [fundamental_ok(c, q) for c, q in
+                                zip(df["fcf"], df["schulden_ebitda"])]
     return df
 
 
 # --------------------------------------------------------------------------
 # Optionspraemie
 # --------------------------------------------------------------------------
-def praemie_fuer(symbol: str, abstand_pct: int, monate: int,
+def praemie_fuer(symbol: str, abstand_pct: int, handelstage: int,
                  kurs: float | None = None) -> dict:
     """Marktpraemie fuer den passenden Put -- ein Yahoo-Abruf je Aufruf.
 
@@ -507,7 +589,8 @@ def praemie_fuer(symbol: str, abstand_pct: int, monate: int,
     verfalle = list(tk.options or [])
     if not verfalle:
         return {}
-    ziel = date.today() + timedelta(days=int(round(monate * 30.44)))
+    # Handelstage in Kalendertage: fuenf Handelstage sind eine Kalenderwoche.
+    ziel = date.today() + timedelta(days=int(round(handelstage * 7 / 5)))
     verfall = min(verfalle, key=lambda v: abs((date.fromisoformat(v) - ziel).days))
     kette = tk.option_chain(verfall).puts
     if kette is None or kette.empty:
@@ -536,17 +619,67 @@ def praemie_fuer(symbol: str, abstand_pct: int, monate: int,
     }
 
 
+def merkliste_status(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Warum ein eigener Titel -- Merkliste oder schon gehandelt -- fehlt.
+
+    Ohne diese Auskunft endet jede Luecke in derselben Frage -- "warum sehe
+    ich ASML nicht?" -- und die Antwort ist jedes Mal eine andere: kein
+    Kursverlauf, fundamental ausgeschlossen, oder schlicht noch nicht
+    gerechnet. Die Tabelle beantwortet sie von selbst.
+    """
+    teile = []
+    for sql, woher in (("SELECT DISTINCT symbol FROM option_watchlist", "Merkliste"),
+                       ("SELECT symbol FROM put_gehandelt", "gehandelt")):
+        try:
+            d = pd.read_sql_query(sql, conn)
+            d["woher"] = woher
+            teile.append(d)
+        except Exception:
+            continue
+    if not teile:
+        return pd.DataFrame()
+    merk = pd.concat(teile).drop_duplicates(subset="symbol", keep="last")
+    if merk.empty:
+        return merk
+    zeilen = []
+    for sym in merk["symbol"]:
+        f = conn.execute(
+            "SELECT fcf, schulden_ebitda, name FROM put_fundamental "
+            "WHERE symbol = ?", (sym,)).fetchone()
+        hat_kurse = conn.execute(
+            "SELECT 1 FROM stock_data WHERE symbol = ? LIMIT 1", (sym,)).fetchone()
+        gerechnet = conn.execute(
+            "SELECT count(*) FROM put_ergebnis WHERE symbol = ?", (sym,)).fetchone()[0]
+        if gerechnet:
+            grund = "in der Liste"
+            if f is not None and not fundamental_ok(f[0], f[1]):
+                grund = "in der Liste (Fundamentalfilter nicht bestanden)"
+        elif not hat_kurse:
+            grund = "keine Kursreihe in der Datenbank"
+        elif f is None:
+            grund = "Fundamentaldaten fehlen — noch nicht abgerufen"
+        elif f[0] is None or f[0] <= 0:
+            grund = "freier Cashflow negativ oder unbekannt"
+        elif f[1] is None:
+            grund = "Nettoverschuldung/EBITDA unbekannt"
+        elif f[1] > MAX_NETTOSCHULDEN_EBITDA:
+            grund = f"Nettoverschuldung {f[1]:.1f}× EBITDA (Grenze {MAX_NETTOSCHULDEN_EBITDA:.0f}×)"
+        else:
+            grund = "gefiltert — noch nicht gerechnet"
+        zeilen.append({"symbol": sym, "name": (f[2] if f else None),
+                       "woher": merk.loc[merk["symbol"] == sym, "woher"].iloc[0],
+                       "status": grund})
+    return pd.DataFrame(zeilen).sort_values(["status", "symbol"])
+
+
 def _selbsttest() -> int:
     """Rechenkern gegen von Hand nachvollziehbare Faelle."""
-    fehler = 0
+    idx = pd.date_range("2006-01-02", periods=2600, freq="B")
 
     # 1. Stetig steigender Kurs -> nie ausgeuebt.
-    idx = pd.date_range("2006-01-02", periods=2600, freq="B")
     steigend = pd.Series([100 * (1.0004 ** i) for i in range(len(idx))], index=idx)
-    b = backtest(steigend, 15, 3)
-    assert b["unter"] == 0, b
-    assert b["p_ausuebung"] == 0.0
-    assert b["eigenstaendig"] == b["faelle"] // 3
+    b = backtest(steigend, 15, 63)
+    assert b["unter"] == 0 and b["p_ausuebung"] == 0.0, b
 
     # 2. Stetig fallender Kurs -> immer ausgeuebt, Rueckgang positiv.
     #    0,5 % je Handelstag: nach 63 Tagen steht der Kurs bei 73 % des
@@ -554,26 +687,55 @@ def _selbsttest() -> int:
     #    er nur 6 % gefallen und der Put trotz Dauerbaisse nie ausgeuebt --
     #    ein Testfall, der nichts zeigt.
     fallend = pd.Series([100 * (0.995 ** i) for i in range(len(idx))], index=idx)
-    b2 = backtest(fallend, 15, 3)
-    assert b2["p_ausuebung"] == 1.0, b2
-    assert b2["mittl_rueckgang"] > 0
+    b2 = backtest(fallend, 15, 63)
+    assert b2["p_ausuebung"] == 1.0 and b2["mittl_rueckgang"] > 0, b2
 
-    # 3. Wilson bleibt im Bereich [0,1] -- der Grund, warum nicht die
+    # 3. Ueberlappung: Bei einer Woche Laufzeit und woechentlichem Start
+    #    ueberlappt nichts -- Fallzahl und eigenstaendige Zeitraeume sind
+    #    gleich. Bei drei Monaten ist es rund ein Zwoelftel davon.
+    kurz = backtest(steigend, 5, 5)
+    assert kurz["faelle"] == kurz["eigenstaendig"], kurz
+    lang = backtest(steigend, 5, 63)
+    assert lang["eigenstaendig"] == round(lang["faelle"] * 5 / 63), lang
+    assert lang["eigenstaendig"] < lang["faelle"] / 10
+
+    # 4. Naeherer Strike wird oefter gerissen als ein weiter entfernter.
+    #    Sinusfoermiger Kurs, damit beide Richtungen vorkommen.
+    import math
+    #    Die Schwingung muss schnell genug sein, damit sie innerhalb der
+    #    Laufzeit ueberhaupt bis zum Strike reicht: mit einer Periode von
+    #    250 Tagen bewegt sich der Kurs in zwei Wochen um 3 % und reisst
+    #    selbst den naechsten Strike nie -- ein Test, der nichts pruefte.
+    schwankend = pd.Series(
+        [100 + 15 * math.sin(i / 6.0) for i in range(len(idx))], index=idx)
+    nah = backtest(schwankend, 5, 10)
+    weit = backtest(schwankend, 20, 10)
+    assert nah["p_ausuebung"] > weit["p_ausuebung"] >= 0.0, (nah, weit)
+    #    Umgekehrt NICHT pruefbar: Wird ein weit entfernter Strike doch
+    #    gerissen, liegt der Kurs im Schnitt tiefer darunter, nicht flacher --
+    #    dieselbe Bewegung, gemessen an einer kleineren Bezugsgroesse.
+
+    # 5. Wilson bleibt im Bereich [0,1] -- der Grund, warum nicht die
     #    Normalnaeherung benutzt wird.
     lo, hi = wilson(80, 80)
-    assert 0.0 <= lo <= 1.0 and hi <= 1.0, (lo, hi)
-    assert lo < 1.0, "Obergrenze 1 bei 80/80 ist richtig, Untergrenze nicht"
+    assert 0.0 <= lo < 1.0 and hi <= 1.0, (lo, hi)
 
-    # 4. Rendite: 55 $ Praemie, Strike 75, 87 Tage -> 0,73 % / ~3 % p. a.
+    # 6. Rendite: 55 $ Praemie, Strike 75, 87 Tage -> 0,73 % / ~3 % p. a.
     r = rendite(0.55, 75.0, 87)
     assert abs(r["rendite_periode"] - 0.007333) < 1e-5, r
     assert abs(r["rendite_pa"] - 0.03077) < 1e-4, r
-    # 5. Bei 50 % Grenzsteuer bleibt die Haelfte.
+    # 7. Bei 50 % Grenzsteuer bleibt die Haelfte.
     r2 = rendite(0.55, 75.0, 87, grenzsteuer_pct=50.0)
     assert abs(r2["rendite_pa_netto"] - r["rendite_pa"] / 2) < 1e-9, r2
 
-    print("Selbsttest bestanden (5 Faelle)" if not fehler else "FEHLER")
-    return fehler
+    # 8. Kurze Laufzeit hochgerechnet: 0,30 % in einer Woche sind rund 16 %
+    #    im Jahr -- die Zahl, die kurze Laufzeiten attraktiv aussehen laesst.
+    kw = rendite(0.15, 50.0, 7)
+    assert abs(kw["rendite_periode"] - 0.003) < 1e-9, kw
+    assert 0.15 < kw["rendite_pa"] < 0.16, kw
+
+    print("Selbsttest bestanden (8 Faelle)")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -592,6 +754,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Indexmitglieder neu holen")
     ap.add_argument("--fundamental", action="store_true",
                     help="Cashflow/Verschuldung neu holen (langsam, woechentlich)")
+    ap.add_argument("--nur-neu", action="store_true",
+                    help="mit --fundamental: nur Titel ohne gespeicherte Werte")
     ap.add_argument("--historie", action="store_true",
                     help="Kurse 2005-2010 fuer Kandidaten nachladen (einmalig)")
     ap.add_argument("--rechnen", action="store_true",
@@ -611,7 +775,12 @@ def main(argv: list[str] | None = None) -> int:
     if a.fundamental:
         syms = [r[0] for r in conn.execute(
             "SELECT symbol FROM put_universum ORDER BY symbol")]
-        print("Fundamentaldaten:", fundamental_laden(syms))
+        if a.nur_neu:
+            # Nach einer Erweiterung des Universums waeren sonst 490
+            # Abrufe faellig, obwohl zwanzig fehlen.
+            da = {r[0] for r in conn.execute("SELECT symbol FROM put_fundamental")}
+            syms = [s for s in syms if s not in da]
+        print(f"Fundamentaldaten fuer {len(syms)} Titel:", fundamental_laden(syms))
     if a.historie:
         # Nur fuer Kandidaten: Altdaten fuer Titel zu laden, die der
         # Fundamentalfilter ohnehin aussortiert, waeren verschenkte Abrufe.

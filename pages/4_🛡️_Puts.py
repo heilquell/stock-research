@@ -29,11 +29,10 @@ sidebar_login()
 
 st.title("🛡️ Puts schreiben")
 
-KOMBI_NAMEN = {
-    "15/3": "15 % unter Kurs, 3 Monate",
-    "15/6": "15 % unter Kurs, 6 Monate",
-    "20/6": "20 % unter Kurs, 6 Monate",
-}
+# Vorgabe: zwei Wochen Laufzeit, 7 % unter dem Kurs. Das ist der Zuschnitt,
+# der tatsaechlich gehandelt wird -- die Vorlage kennt nur Monate und 15 %.
+VORGABE_ABSTAND = 7
+VORGABE_TAGE = 10
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -68,10 +67,20 @@ if not stand:
     )
     st.stop()
 
-links, rechts = st.columns([3, 2])
+links, mitte, rechts = st.columns([2, 2, 3])
 with links:
-    kombi = st.radio("Kombination", list(KOMBI_NAMEN),
-                     format_func=KOMBI_NAMEN.get, horizontal=True)
+    abstand = st.radio(
+        "Abstand zum Kurs", ps.ABSTAENDE, horizontal=True,
+        index=ps.ABSTAENDE.index(VORGABE_ABSTAND),
+        format_func=lambda a: f"−{a} %",
+        help="Wie weit der Ausübungspreis unter dem heutigen Kurs liegt.")
+with mitte:
+    tage = st.radio(
+        "Laufzeit", [d for d, _ in ps.LAUFZEITEN], horizontal=True,
+        index=[d for d, _ in ps.LAUFZEITEN].index(VORGABE_TAGE),
+        format_func=lambda d: ps.LAUFZEIT_NAMEN[d],
+        help="In Handelstagen gerechnet: eine Woche sind fünf Kurszeilen.")
+kombi = ps.kombi_schluessel(abstand, tage)
 with rechts:
     grenzsteuer = st.slider(
         "Grenzsteuersatz für die Nettorechnung (%)", 0, 55, 42, step=1,
@@ -81,7 +90,7 @@ with rechts:
 
 df = _rangliste(kombi)
 if df.empty:
-    st.warning("Für diese Kombination liegt noch kein Ergebnis vor.")
+    st.warning(f"Für {ps.kombi_name(abstand, tage)} liegt noch kein Ergebnis vor.")
     st.stop()
 
 nur_belastbar = st.checkbox(
@@ -91,9 +100,33 @@ nur_belastbar = st.checkbox(
 if nur_belastbar:
     df = df[df["eigenstaendig"] >= ps.MIN_EIGENSTAENDIG]
 
+QUELLE_NAMEN = {"SP500": "S&P 500", "MERKLISTE": "Merkliste",
+                "GEHANDELT": "selbst gehandelt"}
+
+# Eigene Titel stehen auch dann in der Tabelle, wenn sie den Fundamentalfilter
+# nicht bestehen -- wer auf einen Wert schon Optionen geschrieben hat, will
+# die Zahlen sehen und nicht, dass ein Filter ihn stillschweigend verschluckt.
+# Sichtbar bleibt der Unterschied trotzdem.
+eigene = df["quelle"].isin(("MERKLISTE", "GEHANDELT"))
+if eigene.any() and st.checkbox(
+        f"Nur eigene Titel — Merkliste und schon gehandelt ({int(eigene.sum())})",
+        value=False):
+    df = df[eigene]
+    eigene = df["quelle"].isin(("MERKLISTE", "GEHANDELT"))
+schwach = eigene & ~df["fundamental_ok"]
+if schwach.any():
+    if not st.checkbox(
+            f"Eigene Titel mitzeigen, die den Fundamentalfilter nicht bestehen "
+            f"({int(schwach.sum())})", value=True,
+            help="Meist hohe Verschuldung (REITs, BDCs) oder negativer freier "
+                 "Cashflow. Die Backtest-Zahlen stimmen trotzdem."):
+        df = df[~schwach]
+
 anzeige = pd.DataFrame({
     "Symbol": df["symbol"],
     "Name": df["name"],
+    "Quelle": df["quelle"].map(QUELLE_NAMEN).fillna("—"),
+    "Fundamental": ["✓" if ok else "⚠" for ok in df["fundamental_ok"]],
     "Sektor": df["sektor"],
     "Kurs": df["kurs"].round(2),
     "gehalten": (100 * (1 - df["p_ausuebung"])).round(1),
@@ -118,12 +151,45 @@ st.dataframe(
             "Ø Rückgang %", help="Wie weit der Kurs unter dem Ausübungspreis "
                                  "lag, wenn er darunter lag."),
         "schlimmster Fall": st.column_config.NumberColumn("max. %"),
+        "Fundamental": st.column_config.TextColumn(
+            "Fund.", help="✓ positiver freier Cashflow und Nettoverschuldung "
+                          "≤ 4× EBITDA. ⚠ eigener Titel, der das nicht "
+                          "erfüllt — bei REITs und BDCs ist hohe Verschuldung "
+                          "allerdings der Normalzustand, kein Warnzeichen."),
     })
 
 st.caption(
-    f"Stand {stand} · {n_titel} Titel · Universum S&P 500, gefiltert auf "
-    "positiven freien Cashflow und Nettoverschuldung ≤ 4× EBITDA."
+    f"Stand {stand} · {n_titel} Titel · Universum S&P 500 plus die eigene "
+    "Options-Merkliste, gefiltert auf positiven freien Cashflow und "
+    "Nettoverschuldung ≤ 4× EBITDA."
 )
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _merkliste() -> pd.DataFrame:
+    conn = ps.verbindung()
+    try:
+        return ps.merkliste_status(conn)
+    finally:
+        conn.close()
+
+
+merk = _merkliste()
+if not merk.empty:
+    fehlen = merk[merk["status"] != "in der Liste"]
+    titel = ("Eigene Merkliste — "
+             + (f"{len(fehlen)} von {len(merk)} Titeln fehlen in der Tabelle"
+                if len(fehlen) else "alle Titel sind in der Tabelle"))
+    with st.expander(titel):
+        st.caption(
+            "Der S&P 500 nimmt keine ausländischen Emittenten auf — ASML, "
+            "Novo Nordisk oder AstraZeneca können dort nicht stehen, obwohl "
+            "auf sie Optionen gehandelt werden. Deshalb kommen die eigene "
+            "Merkliste und alle schon gehandelten Basiswerte als zweite "
+            "Quelle dazu; sie werden auch dann gerechnet, wenn sie den "
+            "Fundamentalfilter nicht bestehen. Wer hier trotzdem fehlt, "
+            "fehlt aus einem genannten Grund.")
+        st.dataframe(merk, use_container_width=True, hide_index=True)
 
 # --------------------------------------------------------------------------
 # Praemie und Rendite fuer einen Titel
@@ -142,9 +208,8 @@ with sp1:
 
 if holen and symbol:
     zeile = df[df["symbol"] == symbol].iloc[0]
-    abstand, monate = (int(x) for x in kombi.split("/"))
     with st.spinner(f"Optionskette {symbol} …"):
-        pr = ps.praemie_fuer(symbol, abstand, monate, kurs=float(zeile["kurs"]))
+        pr = ps.praemie_fuer(symbol, abstand, tage, kurs=float(zeile["kurs"]))
     if not pr or pr["mid"] != pr["mid"]:
         st.warning(
             "Keine brauchbare Notierung: Entweder gibt es zu diesem Verfall "
@@ -177,20 +242,31 @@ if holen and symbol:
 st.divider()
 with st.expander("Wie diese Liste entsteht — und was sie nicht kann"):
     st.markdown(f"""
-**Die Auswahl.** Universum ist der S&P 500. Es fliegt raus, wer negativen
-freien Cashflow hat oder dessen Nettoverschuldung mehr als das Vierfache des
-EBITDA beträgt. Übrig bleiben Namen, die man notfalls auch halten würde.
+**Die Auswahl.** Universum ist der S&P 500, dazu die eigene Merkliste und
+jeder Basiswert, auf den schon einmal Optionen gehandelt wurden. Aus dem
+S&P 500 fliegt raus, wer negativen freien Cashflow hat oder dessen
+Nettoverschuldung mehr als das Vierfache des EBITDA beträgt — übrig bleiben
+Namen, die man notfalls auch halten würde. Eigene Titel werden immer
+gerechnet und mit ⚠ gekennzeichnet, wenn sie den Filter reißen.
 
-**Der Backtest.** An jedem Monatsanfang der verfügbaren Historie wird eine
-gedachte Position eröffnet: Ausübungspreis 15 bzw. 20 % unter dem damaligen
-Kurs, Vergleich mit dem Kurs 3 bzw. 6 Monate später. Gezählt wird, wie oft
-der Kurs darunter lag — und um wie viel.
+**Der Backtest.** Jede Woche der verfügbaren Historie wird eine gedachte
+Position eröffnet: Ausübungspreis 5 bis 20 % unter dem damaligen Kurs,
+Vergleich mit dem Kurs eine Woche bis sechs Monate später. Gezählt wird, wie
+oft der Kurs darunter lag — und um wie viel. Gerechnet wird das volle Kreuz
+aus fünf Abständen und fünf Laufzeiten, 25 Kombinationen je Titel.
 
-**Warum die Untergrenze danebensteht.** Monatliche Startpunkte bei drei
-Monaten Laufzeit überlappen sich zu zwei Dritteln; benachbarte Fälle sind
-keine unabhängigen Versuche. Das Vertrauensintervall wird deshalb auf der
-Zahl der sich *nicht* überlappenden Zeiträume gerechnet, nicht auf der
-rohen Fallzahl. Es fällt dadurch deutlich breiter aus — und ehrlicher.
+**Warum die Untergrenze danebensteht.** Wöchentliche Startpunkte bei drei
+Monaten Laufzeit überlappen sich zu zwölf Dreizehnteln; benachbarte Fälle
+sind keine unabhängigen Versuche. Das Vertrauensintervall wird deshalb auf
+der Zahl der sich *nicht* überlappenden Zeiträume gerechnet, nicht auf der
+rohen Fallzahl. Bei einer Woche Laufzeit überlappt nichts — dort sind beide
+Zahlen gleich, und das Intervall ist entsprechend eng.
+
+**Warum kurze Laufzeiten anders aussehen.** Je näher der Ausübungspreis und
+je kürzer die Laufzeit, desto kleiner die Prämie — aber desto öfter im Jahr
+einsetzbar. Die Jahresrendite rechnet das hoch; die Trefferquote je Einsatz
+ist dabei die Zahl, die man im Auge behalten muss. Wer wöchentlich schreibt,
+hat fünfzigmal im Jahr die Gelegenheit, danebenzuliegen.
 
 **Der Zirkelschluss, den man kennen sollte.** Wer nach der niedrigsten
 historischen Ausübungswahrscheinlichkeit sortiert und diese Zahl dann als
