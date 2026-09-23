@@ -109,6 +109,12 @@ st.page_link(
     icon="🧮",
 )
 
+st.page_link(
+    "pages/4_🛡️_Puts.py",
+    label="Puts — solide Titel, weit aus dem Geld, Rendite nach Steuer",
+    icon="🛡️",
+)
+
 with st.expander("Dokumentation"):
     doku_path = os.path.join(os.path.dirname(__file__), "DOKU.md")
     if os.path.exists(doku_path):
