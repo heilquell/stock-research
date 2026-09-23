@@ -18,7 +18,7 @@ Streamlit-Tool für technische Analyse von (~3.500 des Autors) Wertpapieren — 
 |---|---|
 | 📊 Crossover | Aktien-Chart mit Candlesticks, MA-9/MA-21 (oder Vielfache), Prophet-Forecast 1-10 Jahre, Buy/Sell-Signal-Scanner mit Filtern (MA-Trend, Favoriten), Fundamental-Screener |
 | 🧮 Optionen | Rollen (Credit je Verfallstermin, Ertrag pro Tag), Preis & Griechen, Optionskette, implizite Volatilität — samt Andienungswahrscheinlichkeit |
-| 🛡️ Puts | Fundamental gefilterte S&P-500-Titel, Backtest weit aus dem Geld liegender Puts (−15/−20 %, 3/6 Monate) mit Vertrauensintervall, Prämie je Kontrakt und Rendite p. a. **vor und nach Tarifsteuer** |
+| 🛡️ Puts | S&P-500-Titel plus eigene Basiswerte, Backtest aus dem Geld liegender Puts über das Kreuz aus fünf Abständen (−5 … −20 %) und fünf Laufzeiten (1 Woche … 6 Monate) mit Vertrauensintervall, Prämie je Kontrakt und Rendite p. a. **vor und nach Tarifsteuer** |
 
 ### Put-Schreiber-Liste
 
@@ -31,6 +31,13 @@ raus, wer negativen freien Cashflow hat oder dessen Nettoverschuldung mehr als
 das Vierfache des EBITDA beträgt. Für die übrigen wird an jedem Monatsanfang
 eine gedachte Position eröffnet und mit dem Kurs 3 bzw. 6 Monate später
 verglichen.
+
+Gerechnet wird das volle Kreuz aus fünf Abständen (5, 7, 10, 15, 20 %) und
+fünf Laufzeiten (1 Woche, 2 Wochen, 1 Monat, 3 und 6 Monate) — 25
+Kombinationen je Titel, knapp 10.000 Backtests in 14 Sekunden (vektorisiert).
+Startpunkte liegen **wöchentlich**, nicht monatlich: Bei einer Woche Laufzeit
+wären monatliche Starts eine Stichprobe von einem Fünftel der möglichen Fälle,
+und gerade die kurzen Laufzeiten sind die interessanten.
 
 Drei Dinge, die kommerzielle Varianten dieser Liste weglassen:
 
