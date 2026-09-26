@@ -133,6 +133,8 @@ anzeige = pd.DataFrame({
     "davon sicher ab": (100 * df["ci_lo"]).round(1),
     "Ø Rückgang wenn nicht": df["mittl_rueckgang"].round(1),
     "schlimmster Fall": df["max_rueckgang"].round(1),
+    "erwartet": df["erwartet_pa"].round(1),
+    "vorsichtig": df["vorsichtig_pa"].round(1),
     "Zeiträume": df["eigenstaendig"],
     "Schulden/EBITDA": df["schulden_ebitda"].round(1),
     "Historie ab": df["historie_ab"],
@@ -151,6 +153,15 @@ st.dataframe(
             "Ø Rückgang %", help="Wie weit der Kurs unter dem Ausübungspreis "
                                  "lag, wenn er darunter lag."),
         "schlimmster Fall": st.column_config.NumberColumn("max. %"),
+        "erwartet": st.column_config.NumberColumn(
+            "erwartet %/J", help="Ausübungswahrscheinlichkeit × Ø Rückgang, "
+                                 "hochgerechnet aufs Jahr: der erwartete "
+                                 "Verlust in Prozent des gebundenen Kapitals."),
+        "vorsichtig": st.column_config.NumberColumn(
+            "vorsichtig %/J", help="Dasselbe, aber mit der pessimistischen "
+                                   "Kante des Vertrauensintervalls statt der "
+                                   "gemessenen Quote — bestraft dünne "
+                                   "Stichproben. Die Liste ist danach sortiert."),
         "Fundamental": st.column_config.TextColumn(
             "Fund.", help="✓ positiver freier Cashflow und Nettoverschuldung "
                           "≤ 4× EBITDA. ⚠ eigener Titel, der das nicht "
@@ -162,6 +173,13 @@ st.caption(
     f"Stand {stand} · {n_titel} Titel · Universum S&P 500 plus die eigene "
     "Options-Merkliste, gefiltert auf positiven freien Cashflow und "
     "Nettoverschuldung ≤ 4× EBITDA."
+)
+st.caption(
+    "⚠️ Das Universum sind die **heutigen** Indexmitglieder. Titel, die seit "
+    "2005 pleitegingen oder aus dem Index flogen, fehlen — ihre schlechten "
+    "Verläufe also auch. Alle Quoten oben sind dadurch systematisch zu "
+    "freundlich; korrigieren ließe sich das nur mit historischen "
+    "Indexlisten, die es nicht kostenlos gibt."
 )
 
 
@@ -239,6 +257,73 @@ if holen and symbol:
             )
 
 # --------------------------------------------------------------------------
+# Erst Praemie minus erwarteter Verlust ergibt eine Empfehlung. Die Praemie
+# kostet je Titel einen Yahoo-Abruf, deshalb nur auf Knopfdruck und nur fuer
+# die Spitze der Liste.
+st.divider()
+st.subheader("Lohnt es sich? Prämie gegen erwarteten Verlust")
+st.caption(
+    "Die Kennzahl oben misst nur das Risiko. Erst wenn die Prämie dagegensteht, "
+    "wird daraus eine Empfehlung: **Prämie p. a. − erwarteter Verlust p. a.** "
+    "Weil jede Prämie einen Abruf bei Yahoo kostet, holt der Knopf sie nur für "
+    "die besten Titel der aktuellen Auswahl."
+)
+
+anzahl_top = st.slider("Wie viele Titel prüfen?", 3, 15, 8)
+if st.button("Prämien holen und vergleichen", type="primary"):
+    zeilen = []
+    fortschritt = st.progress(0.0)
+    kandidaten_top = df.head(anzahl_top).to_dict("records")
+    for i, r in enumerate(kandidaten_top, start=1):
+        pr = ps.praemie_fuer(r["symbol"], abstand, tage, kurs=float(r["kurs"]))
+        fortschritt.progress(i / len(kandidaten_top))
+        if not pr or pr["mid"] != pr["mid"]:
+            continue
+        rend = ps.rendite(pr["mid"], pr["strike"], pr["tage"], grenzsteuer)
+        if not rend:
+            continue
+        brutto = 100 * rend["rendite_pa"]
+        netto = 100 * rend["rendite_pa_netto"]
+        zeilen.append({
+            "Symbol": r["symbol"],
+            "Name": r["name"],
+            "Strike": round(pr["strike"], 2),
+            "Verfall": pr["verfall"],
+            "Prämie €/Kontrakt": round(rend["praemie_kontrakt"], 0),
+            "Prämie %/J": round(brutto, 2),
+            "nach Steuer %/J": round(netto, 2),
+            "erwarteter Verlust %/J": round(r["vorsichtig_pa"], 2),
+            "Überschuss %/J": round(netto - r["vorsichtig_pa"], 2),
+        })
+    fortschritt.empty()
+    if not zeilen:
+        st.warning("Keine brauchbaren Notierungen — zu diesen Verfallterminen "
+                   "gibt es keine Ketten mit Geld- und Briefkurs.")
+    else:
+        erg = pd.DataFrame(zeilen).sort_values("Überschuss %/J", ascending=False)
+        st.dataframe(erg, use_container_width=True, hide_index=True)
+        bester = erg.iloc[0]
+        if bester["Überschuss %/J"] > 0:
+            st.success(
+                f"Bestes Verhältnis: **{bester['Symbol']}** — "
+                f"{bester['nach Steuer %/J']:.2f} % Prämie nach Steuer gegen "
+                f"{bester['erwarteter Verlust %/J']:.2f} % erwarteten Verlust, "
+                f"Überschuss {bester['Überschuss %/J']:.2f} Prozentpunkte im Jahr."
+            )
+        else:
+            st.warning(
+                "Kein Titel in dieser Auswahl trägt sich: Die Prämien liegen "
+                "nach Steuer unter dem erwarteten Verlust. Das ist ein "
+                "Ergebnis, kein Fehler — dann ist dieser Zuschnitt gerade "
+                "nicht bezahlt."
+            )
+        st.caption(
+            "Der Überschuss ist eine Erwartung, keine Rendite: Er sagt, was "
+            "übrig bleibt, wenn sich die Vergangenheit im Mittel wiederholt. "
+            "Eine einzelne Position kann trotzdem den schlimmsten Fall aus der "
+            "Spalte „max. %\" treffen."
+        )
+
 st.divider()
 with st.expander("Wie diese Liste entsteht — und was sie nicht kann"):
     st.markdown(f"""
@@ -272,6 +357,30 @@ hat fünfzigmal im Jahr die Gelegenheit, danebenzuliegen.
 historischen Ausübungswahrscheinlichkeit sortiert und diese Zahl dann als
 Gütesiegel zeigt, wählt zwangsläufig die Titel aus, die zufällig gestiegen
 sind. Die Liste sagt, was war, nicht was kommt.
+
+**Überlebende unter sich.** Dazu kommt derselbe Effekt eine Ebene höher: Das
+Universum besteht aus den heutigen Indexmitgliedern. Wer seit 2005
+pleiteging, übernommen wurde oder aus dem Index fiel, ist gar nicht erst
+dabei — mit ihm sein Absturz. Der Backtest hat also einen Krieg
+nachgerechnet, aus dessen Geschichtsbüchern die Gefallenen entfernt wurden.
+Sauber beheben ließe sich das nur mit historischen Indexständen; die gibt es
+nicht gratis. Die Zahlen sind deshalb als Obergrenze zu lesen, nicht als
+Erwartung.
+
+**Die Kennzahl.** Trefferquote und Fallhöhe gehören multipliziert, nicht
+nebeneinandergelegt: 2 % Ausübung mit 20 % Rückgang kostet im Mittel dasselbe
+wie 8 % mit 5 %. Das Produkt ist der erwartete Verlust in Prozent des
+gebundenen Kapitals, hochgerechnet aufs Jahr. Die Spalte „vorsichtig" nimmt
+statt der gemessenen Quote die pessimistische Kante des
+Vertrauensintervalls — damit fällt ein Titel mit 99 % auf 40 Zeiträumen
+hinter einen mit 98 % auf 1.000 zurück. Der schlimmste Einzelfall geht
+bewusst **nicht** ein; ein Ereignis von vor fünfzehn Jahren darf einen
+Durchschnitt nicht beherrschen. Er steht daneben.
+
+**Kurse ohne Dividendenbereinigung.** Verglichen wird der reine Kursverlauf,
+splitbereinigt, aber ohne Dividenden. Das ist Absicht: Eine
+dividendenbereinigte Reihe drückt den früheren Kurs künstlich und lässt jeden
+Put besser aussehen, als er war.
 
 **Die Steuer.** Geschriebene Puts auf IBKR oder CapTrader sind unverbriefte
 Derivate (§ 27a Abs 2 Z 7 EStG). Sie unterliegen dem Einkommensteuertarif,

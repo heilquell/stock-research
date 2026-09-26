@@ -224,7 +224,7 @@ am Stück wären genau die Last, die zur Drosselung führt.
 |---|---|
 | `put_universum` | Indexmitglieder, geschnitten mit `stock_list` |
 | `put_fundamental` | freier Cashflow, Nettoverschuldung, EBITDA, Quote |
-| `put_hist` | Schlusskurse 2005–2010 — `stock_data` beginnt erst 2009-10-21, ohne diese Jahre fehlt der Crash 2008/09 |
+| `put_hist` | **vollständige** Kursreihe der Kandidaten, bei jedem Lauf frisch geholt (unbereinigt um Dividenden, rückgerechnet um Splits) |
 | `put_ergebnis` | fertiger Backtest je Titel und Kombination |
 
 Bewusst getrennt von `stock_data`: Der nächtliche Kurslauf bestimmt seinen

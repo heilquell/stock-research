@@ -55,9 +55,23 @@ Drei Dinge, die kommerzielle Varianten dieser Liste weglassen:
   Aktien-Topf. Aus 3,2 % p. a. werden bei 42 % Grenzsteuer 1,9 %.
 
 Eigene Tabellen (`put_hist`, `put_fundamental`, `put_universum`,
-`put_ergebnis`), damit der nächtliche Kurslauf unberührt bleibt. `put_hist`
-ist nötig, weil `stock_data` erst 2009 beginnt — ohne die Jahre davor fehlt
-der Crash 2008/09 und jede Quote fiele zu schön aus.
+`put_ergebnis`), damit der nächtliche Kurslauf unberührt bleibt.
+
+**Warum eine eigene Kurstabelle.** `stock_data` beginnt erst 2009 — ohne die
+Jahre davor fehlt der Crash 2008/09 und jede Quote fällt zu schön aus. Der
+zweite, wichtigere Grund kam am 26.09.2026 dazu: `stock_data` wird täglich
+fortgeschrieben und zieht Splits **nicht** nach. Yahoo rechnet die Historie
+nach einem Split zurück, unsere gespeicherten Zeilen bleiben stehen — mitten
+in der Reihe klafft dann ein Sprung, den es nie gab (Amphenol am 03.09.2026:
+160,08 → 82,07). Ein Scan über alle Kurse über 5 $ fand **126 betroffene
+Titel**. Der Backtest liest deshalb ausschließlich `put_hist`, das sonntags
+komplett neu geholt wird; `stock_data` ist nur noch Notnagel für Titel ohne
+eigene Reihe.
+
+Gerechnet wird mit dem split-, aber **nicht** dividendenbereinigten
+Schlusskurs. Eine dividendenbereinigte Reihe drückt den früheren Kurs und
+lässt jeden Put besser aussehen, als er war — bei Dividendentiteln wie
+Altria oder NextEra macht das gut zwei Prozentpunkte in der Trefferquote aus.
 
 Die Optionskette wird einzeln und nur auf Knopfdruck geholt: An derselben
 Bibliothek und IP hängt der Kurslauf für 3.200 Titel.
