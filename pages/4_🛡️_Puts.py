@@ -122,8 +122,13 @@ if schwach.any():
                  "Cashflow. Die Backtest-Zahlen stimmen trotzdem."):
         df = df[~schwach]
 
+# Die Bewertung steht vorn, nicht hinter zehn Rohwerten: Sie ist der Grund,
+# warum die Zeilen in dieser Reihenfolge stehen. Was in sie eingeht, folgt
+# dahinter zum Nachvollziehen.
 anzeige = pd.DataFrame({
     "Symbol": df["symbol"],
+    "Bewertung": df["vorsichtig_pa"].round(1),
+    "erwartet": df["erwartet_pa"].round(1),
     "Name": df["name"],
     "Quelle": df["quelle"].map(QUELLE_NAMEN).fillna("—"),
     "Fundamental": ["✓" if ok else "⚠" for ok in df["fundamental_ok"]],
@@ -133,12 +138,15 @@ anzeige = pd.DataFrame({
     "davon sicher ab": (100 * df["ci_lo"]).round(1),
     "Ø Rückgang wenn nicht": df["mittl_rueckgang"].round(1),
     "schlimmster Fall": df["max_rueckgang"].round(1),
-    "erwartet": df["erwartet_pa"].round(1),
-    "vorsichtig": df["vorsichtig_pa"].round(1),
     "Zeiträume": df["eigenstaendig"],
     "Schulden/EBITDA": df["schulden_ebitda"].round(1),
     "Historie ab": df["historie_ab"],
 })
+st.caption(
+    "Sortiert nach **Bewertung** — erwarteter Verlust pro Jahr in Prozent des "
+    "gebundenen Kapitals, klein ist gut. Die Spalten dahinter zeigen, woraus "
+    "sie entsteht."
+)
 st.dataframe(
     anzeige, use_container_width=True, hide_index=True, height=430,
     column_config={
@@ -153,15 +161,17 @@ st.dataframe(
             "Ø Rückgang %", help="Wie weit der Kurs unter dem Ausübungspreis "
                                  "lag, wenn er darunter lag."),
         "schlimmster Fall": st.column_config.NumberColumn("max. %"),
+        "Bewertung": st.column_config.NumberColumn(
+            "Bewertung %/J ▲", help="Erwarteter Verlust pro Jahr in Prozent "
+                                    "des gebundenen Kapitals — klein ist gut, "
+                                    "danach ist sortiert. Gerechnet mit der "
+                                    "pessimistischen Kante des "
+                                    "Vertrauensintervalls, damit dünne "
+                                    "Stichproben nicht nach oben rutschen."),
         "erwartet": st.column_config.NumberColumn(
-            "erwartet %/J", help="Ausübungswahrscheinlichkeit × Ø Rückgang, "
-                                 "hochgerechnet aufs Jahr: der erwartete "
-                                 "Verlust in Prozent des gebundenen Kapitals."),
-        "vorsichtig": st.column_config.NumberColumn(
-            "vorsichtig %/J", help="Dasselbe, aber mit der pessimistischen "
-                                   "Kante des Vertrauensintervalls statt der "
-                                   "gemessenen Quote — bestraft dünne "
-                                   "Stichproben. Die Liste ist danach sortiert."),
+            "erwartet %/J", help="Dieselbe Größe mit der gemessenen Quote "
+                                 "statt der Untergrenze: die beste Schätzung, "
+                                 "ohne Sicherheitsabschlag."),
         "Fundamental": st.column_config.TextColumn(
             "Fund.", help="✓ positiver freier Cashflow und Nettoverschuldung "
                           "≤ 4× EBITDA. ⚠ eigener Titel, der das nicht "
