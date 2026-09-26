@@ -580,7 +580,43 @@ def rangliste(conn: sqlite3.Connection, kombi: str = "15/3") -> pd.DataFrame:
     if not df.empty:
         df["fundamental_ok"] = [fundamental_ok(c, q) for c, q in
                                 zip(df["fcf"], df["schulden_ebitda"])]
+        # Laufzeit steckt im Schluessel ("7/10d"), nicht in einer Spalte --
+        # sie wird fuer die Hochrechnung aufs Jahr gebraucht.
+        df = kennzahl(df, int(kombi.split("/")[1].rstrip("d")))
     return df
+
+
+def kennzahl(df: pd.DataFrame, tage: int) -> pd.DataFrame:
+    """Eine Zahl aus Quote, Untergrenze und Rueckgang: der erwartete Verlust.
+
+    Trefferquote und Fallhoehe gehoeren **multipliziert**, nicht nebeneinander
+    gelegt: 2 % Ausuebung mit 20 % Rueckgang kostet im Mittel genauso viel wie
+    8 % mit 5 %. Das Produkt ist der Erwartungswert des Verlusts, gemessen in
+    Prozent des Ausuebungspreises -- also des Kapitals, das der Put bindet.
+
+    Zwei Lesarten:
+
+    * ``erwartet_pa`` nimmt die gemessene Quote. Die beste Schaetzung.
+    * ``vorsichtig_pa`` nimmt stattdessen die **pessimistische Kante** des
+      Vertrauensintervalls (1 − ci_lo). Damit bestraft die Kennzahl duenne
+      Stichproben: 99 % auf 40 eigenstaendigen Zeitraeumen faellt hinter
+      98 % auf 1.000 zurueck -- und genau das soll sie.
+
+    Beide auf ein Jahr hochgerechnet, sonst waeren Wochen- und
+    Halbjahresputs nicht vergleichbar. Der **schlimmste** Fall geht bewusst
+    NICHT ein: Ein einzelnes Ereignis von vor fuenfzehn Jahren darf einen
+    Durchschnitt nicht beherrschen. Er steht daneben und laesst sich filtern.
+
+    Was hier fehlt, ist die Praemie -- die kostet je Titel einen Abruf bei
+    Yahoo. Erst ``Praemie − erwarteter Verlust`` ist eine Empfehlung; bis
+    dahin ist die Kennzahl eine **Rangfolge des Risikos**, nicht des Ertrags.
+    """
+    kalendertage = max(1.0, tage * 7 / 5)
+    faktor = 365.0 / kalendertage
+    df = df.copy()
+    df["erwartet_pa"] = df["p_ausuebung"] * df["mittl_rueckgang"] * faktor
+    df["vorsichtig_pa"] = (1 - df["ci_lo"]) * df["mittl_rueckgang"] * faktor
+    return df.sort_values("vorsichtig_pa")
 
 
 # --------------------------------------------------------------------------
