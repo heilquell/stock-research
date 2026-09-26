@@ -142,33 +142,42 @@ def tabellen_anlegen(conn: sqlite3.Connection) -> None:
 # Kurshistorie
 # --------------------------------------------------------------------------
 def kursreihe(conn: sqlite3.Connection, symbol: str) -> pd.Series:
-    """Schlusskurse eines Titels, aus beiden Quellen zusammengesetzt.
+    """Schlusskurse eines Titels -- **eine** Quelle, nicht zwei.
 
-    ``put_hist`` deckt die Jahre vor 2009 ab, ``stock_data`` den Rest. Wo sich
-    beide ueberschneiden, gewinnt ``stock_data`` -- die Reihe wird taeglich
-    gepflegt und ist um Splits bereinigt konsistent mit dem Rest der App.
+    Frueher setzte diese Funktion ``put_hist`` (Altjahre) und ``stock_data``
+    (laufend) zusammen. Das ging zweimal schief, und beide Male aus demselben
+    Grund: Die Reihen sind **unterschiedlich bereinigt**.
+
+    * ``put_hist`` wird bei jedem Lauf frisch geholt und ist damit auf den
+      heutigen Stand aller Splits zurueckgerechnet.
+    * ``stock_data`` waechst taeglich an und friert jede Zeile so ein, wie
+      Yahoo sie damals lieferte. Nach einem Split stehen alte und neue Zeilen
+      auf verschiedenen Massstaeben -- bei Amphenol etwa faellt der Kurs am
+      03.09.2026 um 49 %, ohne dass irgendetwas passiert waere.
+
+    Fuer einen Backtest ueber zwanzig Jahre ist das toedlich: Jedes Fenster
+    ueber so eine Stelle hinweg misst den Split statt den Markt. Deshalb
+    kommt die Reihe jetzt vollstaendig aus ``put_hist``; ``stock_data`` dient
+    nur noch als Notnagel, wenn zu einem Titel gar keine eigene Historie
+    vorliegt.
     """
-    alt = pd.read_sql_query(
+    eigen = pd.read_sql_query(
         "SELECT date, close FROM put_hist WHERE symbol = ? ORDER BY date",
         conn, params=(symbol,))
-    neu = pd.read_sql_query(
-        "SELECT date, close FROM stock_data WHERE symbol = ? ORDER BY date",
-        conn, params=(symbol,))
-    teile = [d for d in (alt, neu) if not d.empty]
-    if not teile:
+    if eigen.empty:
+        eigen = pd.read_sql_query(
+            "SELECT date, close FROM stock_data WHERE symbol = ? ORDER BY date",
+            conn, params=(symbol,))
+    if eigen.empty:
         return pd.Series(dtype=float)
-    # Leere Rahmen bewusst vorher aussortiert: pandas warnt sonst, weil es
-    # aus einem leeren Rahmen keine Spaltentypen ableiten kann.
-    df = pd.concat(teile)
-    df = df.drop_duplicates(subset="date", keep="last").sort_values("date")
-    s = pd.Series(df["close"].to_numpy(dtype=float),
-                  index=pd.to_datetime(df["date"]))
+    s = pd.Series(eigen["close"].to_numpy(dtype=float),
+                  index=pd.to_datetime(eigen["date"]))
     return s[s > 0]
 
 
 def historie_laden(symbols: list[str], start: str = "2005-01-01",
                    db_path: str | None = None, pause: float = 0.6) -> dict:
-    """Altdaten von Yahoo nachladen -- einmalig, nicht im Nachtlauf.
+    """Die **volle** Kursreihe von Yahoo holen -- nicht im Nachtlauf.
 
     Der Kurs-Cron aktualisiert 3.200 Titel ueber dieselbe Bibliothek und
     dieselbe IP. Wer hier parallel haemmert, riskiert die Drosselung genau
@@ -182,8 +191,15 @@ def historie_laden(symbols: list[str], start: str = "2005-01-01",
     bericht = {"geladen": 0, "zeilen": 0, "fehler": []}
     for sym in symbols:
         try:
-            df = yf.Ticker(sym).history(start=start, end="2010-01-01",
-                                        auto_adjust=True)
+            # auto_adjust=False ist hier keine Geschmacksfrage, sondern
+            # Pflicht: stock_data speichert den von Yahoo split-, aber NICHT
+            # dividendenbereinigten Schlusskurs. Mit auto_adjust=True lagen an
+            # der Nahtstelle 21.10.2009 Spruenge von 48 bis 68 Prozent in der
+            # Reihe -- jedes Fenster darueber hinweg galt dadurch faelschlich
+            # als "Put nicht ausgeuebt". Dividendenbereinigung waere hier
+            # ausserdem falsch: Sie druckt den frueheren Kurs kuenstlich und
+            # schmeichelt der Quote um rund ein Prozent auf sechs Monate.
+            df = yf.Ticker(sym).history(start=start, auto_adjust=False)
             if df is None or df.empty:
                 bericht["fehler"].append((sym, "leer"))
                 continue
@@ -619,6 +635,36 @@ def praemie_fuer(symbol: str, abstand_pct: int, handelstage: int,
     }
 
 
+def spruenge_pruefen(conn: sqlite3.Connection, schwelle_pct: float = 35.0,
+                     titel: int = 80) -> list[tuple[str, str, float]]:
+    """Sucht unplausible Tagesspruenge in der Reihe, mit der gerechnet wird.
+
+    Ein Kurs, der ueber Nacht um die Haelfte faellt, ist entweder ein
+    Ereignis -- oder ein nicht nachgezogener Split. Beides gehoert gesehen,
+    bevor eine Quote daraus wird. Die Schwelle ist bewusst hoch: Echte
+    Tagesverluste von 35 % gibt es (APA im Oelcrash 2020, AMD nach Zahlen
+    2016), aber es sind wenige, und man will sie einzeln anschauen.
+
+    Anlass: Zwei Bereinigungsfehler hintereinander -- erst dividenden- gegen
+    unbereinigt an der Quellen-Naht, dann eingefrorene Splits in
+    ``stock_data``. Ein Selbsttest faengt so etwas nie, weil er mit
+    erfundenen Reihen arbeitet.
+    """
+    symbole = [r[0] for r in conn.execute(
+        "SELECT DISTINCT symbol FROM put_hist ORDER BY symbol LIMIT ?", (titel,))]
+    auffaellig = []
+    for sym in symbole:
+        reihe = kursreihe(conn, sym)
+        if len(reihe) < 2:
+            continue
+        verhaeltnis = reihe.to_numpy()[1:] / reihe.to_numpy()[:-1] - 1
+        for i, v in enumerate(verhaeltnis):
+            if abs(v) > schwelle_pct / 100:
+                auffaellig.append((sym, str(reihe.index[i + 1].date()),
+                                   round(v * 100, 1)))
+    return auffaellig
+
+
 def merkliste_status(conn: sqlite3.Connection) -> pd.DataFrame:
     """Warum ein eigener Titel -- Merkliste oder schon gehandelt -- fehlt.
 
@@ -757,13 +803,27 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--nur-neu", action="store_true",
                     help="mit --fundamental: nur Titel ohne gespeicherte Werte")
     ap.add_argument("--historie", action="store_true",
-                    help="Kurse 2005-2010 fuer Kandidaten nachladen (einmalig)")
+                    help="volle Kursreihe der Kandidaten holen (nur fehlende)")
+    ap.add_argument("--historie-neu", action="store_true",
+                    help="Kursreihen komplett neu holen -- noetig, sobald ein "
+                         "Titel gesplittet hat (Yahoo rechnet zurueck, wir nicht)")
     ap.add_argument("--rechnen", action="store_true",
                     help="Backtest fuer alle Kandidaten (lokal, schnell)")
+    ap.add_argument("--pruefen", action="store_true",
+                    help="unplausible Kursspruenge in den Reihen suchen")
     a = ap.parse_args(argv)
 
     if a.selbsttest:
         return _selbsttest()
+    if a.pruefen:
+        conn = verbindung()
+        treffer = spruenge_pruefen(conn)
+        conn.close()
+        print(f"{len(treffer)} unplausible Spruenge" if treffer
+              else "keine unplausiblen Spruenge")
+        for sym, tag, abw in treffer[:20]:
+            print(f"  {sym:6s} {tag}  {abw:+7.1f} %")
+        return 0
     if not any((a.universum, a.fundamental, a.historie, a.rechnen)):
         ap.print_help()
         return 0
@@ -781,14 +841,22 @@ def main(argv: list[str] | None = None) -> int:
             da = {r[0] for r in conn.execute("SELECT symbol FROM put_fundamental")}
             syms = [s for s in syms if s not in da]
         print(f"Fundamentaldaten fuer {len(syms)} Titel:", fundamental_laden(syms))
-    if a.historie:
-        # Nur fuer Kandidaten: Altdaten fuer Titel zu laden, die der
+    if a.historie or a.historie_neu:
+        # Nur fuer Kandidaten: Reihen fuer Titel zu holen, die der
         # Fundamentalfilter ohnehin aussortiert, waeren verschenkte Abrufe.
         syms = list(kandidaten(conn)["symbol"])
-        fehlt = [s for s in syms if not conn.execute(
-            "SELECT 1 FROM put_hist WHERE symbol=? LIMIT 1", (s,)).fetchone()]
-        print(f"Historie: {len(fehlt)} von {len(syms)} Kandidaten offen")
-        print("Historie:", historie_laden(fehlt))
+        if a.historie_neu:
+            # Ein Split macht die gespeicherte Reihe unbrauchbar, weil Yahoo
+            # rueckwirkend umrechnet und wir nicht. Deshalb ganz neu statt
+            # anhaengen.
+            conn.execute("DELETE FROM put_hist")
+            conn.commit()
+            offen = syms
+        else:
+            offen = [s for s in syms if not conn.execute(
+                "SELECT 1 FROM put_hist WHERE symbol=? LIMIT 1", (s,)).fetchone()]
+        print(f"Historie: {len(offen)} von {len(syms)} Kandidaten zu holen")
+        print("Historie:", historie_laden(offen))
     if a.rechnen:
         print("Backtest:", alles_rechnen())
     conn.close()

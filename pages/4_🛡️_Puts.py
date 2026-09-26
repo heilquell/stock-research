@@ -163,6 +163,13 @@ st.caption(
     "Options-Merkliste, gefiltert auf positiven freien Cashflow und "
     "Nettoverschuldung ≤ 4× EBITDA."
 )
+st.caption(
+    "⚠️ Das Universum sind die **heutigen** Indexmitglieder. Titel, die seit "
+    "2005 pleitegingen oder aus dem Index flogen, fehlen — ihre schlechten "
+    "Verläufe also auch. Alle Quoten oben sind dadurch systematisch zu "
+    "freundlich; korrigieren ließe sich das nur mit historischen "
+    "Indexlisten, die es nicht kostenlos gibt."
+)
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -272,6 +279,20 @@ hat fünfzigmal im Jahr die Gelegenheit, danebenzuliegen.
 historischen Ausübungswahrscheinlichkeit sortiert und diese Zahl dann als
 Gütesiegel zeigt, wählt zwangsläufig die Titel aus, die zufällig gestiegen
 sind. Die Liste sagt, was war, nicht was kommt.
+
+**Überlebende unter sich.** Dazu kommt derselbe Effekt eine Ebene höher: Das
+Universum besteht aus den heutigen Indexmitgliedern. Wer seit 2005
+pleiteging, übernommen wurde oder aus dem Index fiel, ist gar nicht erst
+dabei — mit ihm sein Absturz. Der Backtest hat also einen Krieg
+nachgerechnet, aus dessen Geschichtsbüchern die Gefallenen entfernt wurden.
+Sauber beheben ließe sich das nur mit historischen Indexständen; die gibt es
+nicht gratis. Die Zahlen sind deshalb als Obergrenze zu lesen, nicht als
+Erwartung.
+
+**Kurse ohne Dividendenbereinigung.** Verglichen wird der reine Kursverlauf,
+splitbereinigt, aber ohne Dividenden. Das ist Absicht: Eine
+dividendenbereinigte Reihe drückt den früheren Kurs künstlich und lässt jeden
+Put besser aussehen, als er war.
 
 **Die Steuer.** Geschriebene Puts auf IBKR oder CapTrader sind unverbriefte
 Derivate (§ 27a Abs 2 Z 7 EStG). Sie unterliegen dem Einkommensteuertarif,
