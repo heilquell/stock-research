@@ -129,6 +129,8 @@ def altlasten_reparieren(conn: sqlite3.Connection, min_kurs: float = 1.0,
             WHERE vor > ? AND close > ? AND (close/vor > 1.6 OR close/vor < 0.625)
             ORDER BY symbol""", (min_kurs * 5, min_kurs)).fetchall()
 
+    print(f"  {len(kandidaten)} Titel mit auffaelligem Sprung — pruefe "
+          f"Verhaeltnisse …", flush=True)
     betroffen = []
     for (sym,) in kandidaten:
         reihe = conn.execute(
@@ -149,10 +151,11 @@ def altlasten_reparieren(conn: sqlite3.Connection, min_kurs: float = 1.0,
         try:
             zeilen = voll_neu_laden(conn, sym)
             geladen += 1
-            print(f"  {sym:6s} Sprung {tag} ({art}) — {zeilen} Zeilen neu")
+            print(f"  {sym:6s} Sprung {tag} ({art}) — {zeilen} Zeilen neu",
+                  flush=True)
         except Exception as exc:
             print(f"  {sym:6s} FEHLER: {type(exc).__name__}: {exc}",
-                  file=sys.stderr)
+                  file=sys.stderr, flush=True)
         sleep(0.4)
     return {"gefunden": len(betroffen), "neu_geladen": geladen}
 
@@ -164,7 +167,8 @@ def main() -> int:
         probe = None
         if "--probe" in sys.argv:
             probe = int(sys.argv[sys.argv.index("--probe") + 1])
-        print(f"[{datetime.now():%F %T}] Suche Reihen mit Split-Sprung …")
+        print(f"[{datetime.now():%F %T}] Suche Reihen mit Split-Sprung …",
+              flush=True)
         print(altlasten_reparieren(conn, probe=probe))
         conn.close()
         return 0
