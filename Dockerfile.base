@@ -1,0 +1,55 @@
+# Basis-Image fuer das Research-Tool: alles, was sich fast nie aendert.
+#
+# Grund: Prophet zieht cmdstanpy nach, und cmdstan wird aus dem Quellcode
+# uebersetzt. Das dauert rund eine Viertelstunde. Solange das im selben
+# Dockerfile stand wie der Anwendungscode, kostete jede Aenderung an einer
+# Streamlit-Seite genau dann einen Volldurchlauf, wenn der Build-Cache
+# zwischendurch weggeraeumt worden war -- und das passiert planmaessig jeden
+# Mittwoch durch /etc/cron.d/docker-builder-prune.
+#
+# Neu bauen muss man dieses Image nur, wenn sich requirements.txt aendert:
+#
+#     cd /docker/research
+#     docker build -f Dockerfile.base -t research-base:1 .
+#     docker compose build && docker compose up -d
+#
+# Bei einer groesseren Aenderung die Zahl hochzaehlen (research-base:2) und
+# im Dockerfile mitziehen, damit ein Rueckweg offen bleibt.
+#
+# Das Label behalten=true schuetzt das Image vor dem taeglichen
+# `docker image prune -af` (/etc/cron.d/docker-image-prune): Ein Basis-Image
+# haengt an keinem Container und gaelte sonst als unbenutzt. Die Schichten
+# ueberlebten zwar, der Tag nicht -- und ohne Tag schlaegt der naechste Build
+# des Anwendungs-Images fehl.
+FROM python:3.11-slim
+
+LABEL behalten="true"
+LABEL beschreibung="Research-Tool: Python-Abhaengigkeiten inkl. Prophet/cmdstan"
+
+# Prophet braucht build-essentials für cmdstanpy/Stan
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# cmdstan 2.33.1 an Prophets erwarteten Pfad installieren
+# (Prophet 1.1.5 bundled nur einen Stub, Pfad ist hardcoded auf cmdstan-2.33.1)
+RUN python -c "\
+import cmdstanpy, shutil; \
+from pathlib import Path; \
+import prophet; \
+stan_dir = Path(prophet.__file__).parent / 'stan_model'; \
+shutil.rmtree(stan_dir / 'cmdstan-2.33.1', ignore_errors=True); \
+cmdstanpy.install_cmdstan(version='2.33.1', dir=str(stan_dir))"
+
+# Zusatz-Pakete nach dem cmdstan-Layer installieren — sonst muesste
+# cmdstan bei jeder requirements.txt-Aenderung neu kompiliert werden.
+# Streamlit steht hier bewusst NICHT: Version und Extras kommen
+# ausschliesslich aus requirements.txt, sonst gaebe es zwei Stellen, an
+# denen die Version auseinanderlaufen kann.
+RUN pip install --no-cache-dir streamlit-searchbox

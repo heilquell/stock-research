@@ -129,6 +129,43 @@ labels:
 
 Externes Traefik-Netzwerk muss `traefik-proxy` heißen (anpassen in `docker-compose.yml` falls anders).
 
+### Zwei Images: Basis und Anwendung
+
+Prophet zieht cmdstanpy nach, und cmdstan wird aus dem Quellcode übersetzt —
+das dauert rund eine Viertelstunde. Stand das im selben Dockerfile wie der
+Anwendungscode, kostete jede Änderung an einer Streamlit-Seite einen
+Volldurchlauf, sobald der Build-Cache zwischendurch weggeräumt worden war.
+
+Deshalb zwei Dateien:
+
+| Datei | Inhalt | wie oft |
+|---|---|---|
+| `Dockerfile.base` → `research-base:1` | Python-Pakete, Prophet, cmdstan | nur bei `requirements.txt` |
+| `Dockerfile` | nur `COPY . .` | bei jeder Code-Änderung |
+
+**Normaler Deploy** (Sekunden):
+
+```bash
+docker compose build && docker compose up -d
+```
+
+**Nach einer Änderung an `requirements.txt`** muss zuerst das Basis-Image neu
+gebaut werden, sonst läuft die Anwendung mit alten Paketversionen weiter:
+
+```bash
+docker build -f Dockerfile.base -t research-base:1 .
+docker compose build && docker compose up -d
+```
+
+Bei einer größeren Umstellung die Zahl hochzählen (`research-base:2`) und im
+`Dockerfile` mitziehen — dann bleibt ein Rückweg offen.
+
+Das Basis-Image trägt `LABEL behalten="true"`. Der tägliche
+`docker image prune -af` auf dem Server filtert mit `label!=behalten=true`
+dagegen, denn ein Basis-Image hängt an keinem Container und gälte sonst als
+unbenutzt: Die Schichten überlebten, der Tag nicht — und ohne Tag schlägt der
+nächste Build mit `FROM research-base:1` fehl.
+
 ## Daten
 
 - **DB nicht im Repo** — `data/`-Volume bleibt beim Container.

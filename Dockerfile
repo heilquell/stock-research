@@ -1,32 +1,20 @@
-FROM python:3.11-slim
-
-# Prophet braucht build-essentials für cmdstanpy/Stan
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        curl \
-        && rm -rf /var/lib/apt/lists/*
+# Anwendungs-Image: nur noch der Code. Alles Schwere steckt im Basis-Image.
+#
+# Die Abhaengigkeiten (Prophet, cmdstan, Streamlit) liegen in
+# research-base:1, gebaut aus Dockerfile.base. Dadurch kostet eine Aenderung
+# an einer Streamlit-Seite einen Build von Sekunden statt einer Viertelstunde
+# -- auch dann, wenn der woechentliche `docker builder prune` den Cache
+# zwischendurch geleert hat.
+#
+# Aendert sich requirements.txt, muss ZUERST das Basis-Image neu gebaut
+# werden, sonst laeuft die Anwendung mit alten Paketversionen weiter:
+#
+#     docker build -f Dockerfile.base -t research-base:1 .
+#
+# Siehe Kopf von Dockerfile.base.
+FROM research-base:1
 
 WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# cmdstan 2.33.1 an Prophets erwarteten Pfad installieren
-# (Prophet 1.1.5 bundled nur einen Stub, Pfad ist hardcoded auf cmdstan-2.33.1)
-RUN python -c "\
-import cmdstanpy, shutil; \
-from pathlib import Path; \
-import prophet; \
-stan_dir = Path(prophet.__file__).parent / 'stan_model'; \
-shutil.rmtree(stan_dir / 'cmdstan-2.33.1', ignore_errors=True); \
-cmdstanpy.install_cmdstan(version='2.33.1', dir=str(stan_dir))"
-
-# Zusatz-Pakete nach dem cmdstan-Layer installieren — sonst muesste
-# cmdstan bei jeder requirements.txt-Aenderung neu kompiliert werden.
-# Zusatz-Pakete nach dem cmdstan-Layer. Streamlit steht hier bewusst NICHT
-# mehr: Version und Extras kommen ausschliesslich aus requirements.txt, sonst
-# gaebe es zwei Stellen, an denen die Version auseinanderlaufen kann.
-RUN pip install --no-cache-dir streamlit-searchbox
 
 COPY . .
 
