@@ -586,6 +586,38 @@ def rangliste(conn: sqlite3.Connection, kombi: str = "15/3") -> pd.DataFrame:
     return df
 
 
+def jahresfaktor(handelstage: int) -> float:
+    """Wie oft eine Haltedauer von ``handelstage`` Handelstagen ins Jahr passt.
+
+    Handelstage werden mit 7/5 in Kalendertage umgerechnet -- eine Woche sind
+    fuenf Kurszeilen. Die Zahl steckte frueher zweimal im Modul; sie gehoert
+    an eine Stelle, weil sie auch in ``auf_restlaufzeit`` gebraucht wird.
+    """
+    return 365.0 / max(1.0, handelstage * 7 / 5)
+
+
+def auf_restlaufzeit(wert_pa: float, handelstage: int, kalendertage: int) -> float:
+    """Rechnet eine Jahresgroesse auf die echte Restlaufzeit einer Option um.
+
+    ``kennzahl`` rechnet den erwarteten Verlust mit der **nominellen** Laenge
+    der Kombination aufs Jahr (10 Handelstage = 14 Kalendertage). Die Praemie
+    gilt dagegen fuer den Verfallstermin, den die Kette tatsaechlich hergibt --
+    bei einem 10-Tage-Zuschnitt koennen das 17 Kalendertage sein. Beide Zahlen
+    voneinander abzuziehen setzt voraus, dass sie denselben Nenner haben;
+    sonst ist der Verlust um das Verhaeltnis der Zeitraeume ueberzeichnet, im
+    Beispiel um 17/14, also gut ein Fuenftel.
+
+    Unterstellt wird dabei, dass der erwartete Verlust **proportional zur
+    Zeit** waechst. Das ist eine Naeherung: Gemessen wurde er ueber Fenster
+    von ``handelstage`` Laenge, und Risiko skaliert nicht exakt linear. Fuer
+    die kleinen Streckungen, um die es hier geht, ist sie vertretbar -- fuer
+    grosse waere sie es nicht.
+    """
+    if kalendertage <= 0:
+        return wert_pa
+    return wert_pa / jahresfaktor(handelstage) * (365.0 / kalendertage)
+
+
 def kennzahl(df: pd.DataFrame, tage: int) -> pd.DataFrame:
     """Eine Zahl aus Quote, Untergrenze und Rueckgang: der erwartete Verlust.
 
@@ -611,8 +643,7 @@ def kennzahl(df: pd.DataFrame, tage: int) -> pd.DataFrame:
     Yahoo. Erst ``Praemie − erwarteter Verlust`` ist eine Empfehlung; bis
     dahin ist die Kennzahl eine **Rangfolge des Risikos**, nicht des Ertrags.
     """
-    kalendertage = max(1.0, tage * 7 / 5)
-    faktor = 365.0 / kalendertage
+    faktor = jahresfaktor(tage)
     df = df.copy()
     df["erwartet_pa"] = df["p_ausuebung"] * df["mittl_rueckgang"] * faktor
     df["vorsichtig_pa"] = (1 - df["ci_lo"]) * df["mittl_rueckgang"] * faktor
@@ -816,7 +847,18 @@ def _selbsttest() -> int:
     assert abs(kw["rendite_periode"] - 0.003) < 1e-9, kw
     assert 0.15 < kw["rendite_pa"] < 0.16, kw
 
-    print("Selbsttest bestanden (8 Faelle)")
+    # 9. Jahresfaktor und Umrechnung auf die echte Restlaufzeit.
+    assert abs(jahresfaktor(10) - 365.0 / 14) < 1e-9, jahresfaktor(10)
+    #    Gleiche Laufzeit -> unveraendert.
+    assert abs(auf_restlaufzeit(3.20, 10, 14) - 3.20) < 1e-9
+    #    Laengere echte Laufzeit -> kleinerer Jahreswert, Faktor 14/17.
+    gestreckt = auf_restlaufzeit(3.20, 10, 17)
+    assert abs(gestreckt - 3.20 * 14 / 17) < 1e-9, gestreckt
+    assert gestreckt < 3.20, gestreckt
+    #    Kein Datum -> unveraendert statt Division durch null.
+    assert auf_restlaufzeit(3.20, 10, 0) == 3.20
+
+    print("Selbsttest bestanden (9 Faelle)")
     return 0
 
 

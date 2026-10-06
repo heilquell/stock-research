@@ -299,6 +299,12 @@ if st.button("Prämien holen und vergleichen", type="primary"):
             continue
         brutto = 100 * rend["rendite_pa"]
         netto = 100 * rend["rendite_pa_netto"]
+        # Der erwartete Verlust kommt mit der NOMINELLEN Kombi-Laenge aufs
+        # Jahr gerechnet (10 Handelstage = 14 Kalendertage), die Praemie mit
+        # dem Verfallstermin, den die Kette hergibt (oft 17 Tage). Fuer die
+        # Differenz muessen beide denselben Nenner haben -- sonst steht der
+        # Verlust um das Verhaeltnis der Zeitraeume zu hoch.
+        verlust = ps.auf_restlaufzeit(r["vorsichtig_pa"], tage, pr["tage"])
         zeilen.append({
             "Symbol": r["symbol"],
             "Name": r["name"],
@@ -307,14 +313,15 @@ if st.button("Prämien holen und vergleichen", type="primary"):
             "Prämie €/Kontrakt": round(rend["praemie_kontrakt"], 0),
             "Prämie %/J": round(brutto, 2),
             "nach Steuer %/J": round(netto, 2),
-            "erwarteter Verlust %/J": round(r["vorsichtig_pa"], 2),
+            "Restlaufzeit Tage": pr["tage"],
+            "erwarteter Verlust %/J": round(verlust, 2),
             # Vor Steuer verglichen: Praemie und erwarteter Verlust gehoeren
             # steuerlich in verschiedene Toepfe (Tarif gegen 27,5 %), und bei
             # Andienung ist die Praemie ueberhaupt nicht eigenstaendig
             # steuerwirksam -- sie mindert die Anschaffungskosten der Aktie.
             # Netto gegen brutto zu rechnen hat den Ueberschuss frueher um
             # rund ein Drittel zu niedrig ausgewiesen.
-            "Überschuss %/J": round(brutto - r["vorsichtig_pa"], 2),
+            "Überschuss %/J": round(brutto - verlust, 2),
         })
     fortschritt.empty()
     if not zeilen:
@@ -344,7 +351,10 @@ if st.button("Prämien holen und vergleichen", type="primary"):
             "Der Überschuss ist eine Erwartung, keine Rendite: Er sagt, was "
             "übrig bleibt, wenn sich die Vergangenheit im Mittel wiederholt. "
             "Eine einzelne Position kann trotzdem den schlimmsten Fall aus der "
-            "Spalte „max. %\" treffen. Verglichen wird **vor Steuer** — die "
+            "Spalte „max. %\" treffen. Beide Spalten rechnen auf **dieselbe "
+            "Restlaufzeit** — die der Kette, nicht die nominelle Länge des "
+            "Zuschnitts; in der Rangliste oben steht der Verlust deshalb etwas "
+            "anders. Verglichen wird **vor Steuer** — die "
             "Prämie fällt unter den Tarif, ein Verlust aus einer Andienung "
             "dagegen in den 27,5-%-Topf, und bei Andienung ist die Prämie "
             "ohnehin nicht eigenständig steuerwirksam, sondern mindert die "
