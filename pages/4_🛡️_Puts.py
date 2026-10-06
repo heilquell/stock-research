@@ -13,8 +13,13 @@ Drei Entscheidungen, die die Seite von kommerziellen Vorbildern unterscheiden:
   25 eigenstaendigen Zeitraeumen ist etwas anderes als dieselbe Zahl auf 67.
 * Die **Rendite auf das gebundene Kapital** steht gleichberechtigt neben der
   Praemie. Sie ist die Zahl, die entscheidet, und sie ist meist ernuechternd.
-* Die **Steuer** ist eingebaut, nicht angehaengt: Geschriebene Puts sind
-  unverbriefte Derivate und damit tarifsteuerpflichtig.
+* Die **Steuer** steht dabei, aber nicht in der Rangfolge. Geschriebene Puts
+  sind unverbriefte Derivate und tarifsteuerpflichtig (§ 27a Abs 2 Z 7) --
+  der erwartete Verlust liegt dagegen gar nicht im Tarif-Topf: Bei Andienung
+  mindert die Praemie die Anschaffungskosten der gelieferten Aktie, und der
+  Verlust entsteht spaeter im 27,5-%-Topf. Zwei Groessen aus zwei Regimen
+  voneinander abzuziehen ergibt keine sinnvolle Zahl, deshalb wird **vor
+  Steuer verglichen**; die Nettopraemie steht als eigene Spalte daneben.
 """
 from datetime import date
 
@@ -303,7 +308,13 @@ if st.button("Prämien holen und vergleichen", type="primary"):
             "Prämie %/J": round(brutto, 2),
             "nach Steuer %/J": round(netto, 2),
             "erwarteter Verlust %/J": round(r["vorsichtig_pa"], 2),
-            "Überschuss %/J": round(netto - r["vorsichtig_pa"], 2),
+            # Vor Steuer verglichen: Praemie und erwarteter Verlust gehoeren
+            # steuerlich in verschiedene Toepfe (Tarif gegen 27,5 %), und bei
+            # Andienung ist die Praemie ueberhaupt nicht eigenstaendig
+            # steuerwirksam -- sie mindert die Anschaffungskosten der Aktie.
+            # Netto gegen brutto zu rechnen hat den Ueberschuss frueher um
+            # rund ein Drittel zu niedrig ausgewiesen.
+            "Überschuss %/J": round(brutto - r["vorsichtig_pa"], 2),
         })
     fortschritt.empty()
     if not zeilen:
@@ -316,14 +327,16 @@ if st.button("Prämien holen und vergleichen", type="primary"):
         if bester["Überschuss %/J"] > 0:
             st.success(
                 f"Bestes Verhältnis: **{bester['Symbol']}** — "
-                f"{bester['nach Steuer %/J']:.2f} % Prämie nach Steuer gegen "
+                f"{bester['Prämie %/J']:.2f} % Prämie gegen "
                 f"{bester['erwarteter Verlust %/J']:.2f} % erwarteten Verlust, "
-                f"Überschuss {bester['Überschuss %/J']:.2f} Prozentpunkte im Jahr."
+                f"Überschuss {bester['Überschuss %/J']:.2f} Prozentpunkte im Jahr "
+                f"— beides vor Steuer. Nach Tarif blieben von der Prämie "
+                f"{bester['nach Steuer %/J']:.2f} %."
             )
         else:
             st.warning(
                 "Kein Titel in dieser Auswahl trägt sich: Die Prämien liegen "
-                "nach Steuer unter dem erwarteten Verlust. Das ist ein "
+                "unter dem erwarteten Verlust. Das ist ein "
                 "Ergebnis, kein Fehler — dann ist dieser Zuschnitt gerade "
                 "nicht bezahlt."
             )
@@ -331,7 +344,12 @@ if st.button("Prämien holen und vergleichen", type="primary"):
             "Der Überschuss ist eine Erwartung, keine Rendite: Er sagt, was "
             "übrig bleibt, wenn sich die Vergangenheit im Mittel wiederholt. "
             "Eine einzelne Position kann trotzdem den schlimmsten Fall aus der "
-            "Spalte „max. %\" treffen."
+            "Spalte „max. %\" treffen. Verglichen wird **vor Steuer** — die "
+            "Prämie fällt unter den Tarif, ein Verlust aus einer Andienung "
+            "dagegen in den 27,5-%-Topf, und bei Andienung ist die Prämie "
+            "ohnehin nicht eigenständig steuerwirksam, sondern mindert die "
+            "Anschaffungskosten der Aktie. Die Spalte „nach Steuer %/J\" "
+            "zeigt, was von der Prämie allein bliebe."
         )
 
 st.divider()
