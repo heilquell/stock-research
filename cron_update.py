@@ -94,6 +94,15 @@ def verdaechtiger_sprung(conn: sqlite3.Connection, symbol: str, data):
 
     Faengt den Fall ab, dass der Split zwischen zwei Laeufen lag und im
     geholten Fenster nicht mehr als Ereignis auftaucht.
+
+    Seit 30.10.2026 loest JEDER Sprung ueber der Schwelle das Neuladen aus,
+    nicht nur glatte Split-Verhaeltnisse. Der Filter hat real durchgelassen:
+    XP am 26.10. mit Faktor 0,516 (0,2 Punkte ausserhalb der 3-%-Toleranz)
+    und sechs krumme Faelle (CTVA x0,162, KOD x2,78, ...), die Spin-offs,
+    Kapitalmassnahmen oder Yahoo-Umbasierungen sein koennen. Neuladen ist
+    idempotent: War die Bewegung echt, steht sie auch in der frisch
+    geholten Reihe -- geheilt wird nur das Anhaeng-Artefakt. Das Verhaeltnis
+    dient nur noch der Log-Begruendung.
     """
     letzte = conn.execute(
         "SELECT close FROM stock_data WHERE symbol = ? ORDER BY date DESC LIMIT 1",
@@ -104,7 +113,10 @@ def verdaechtiger_sprung(conn: sqlite3.Connection, symbol: str, data):
     faktor = erster_neuer / float(letzte[0])
     if abs(faktor - 1) < SPLIT_SCHWELLE:
         return None
-    return _ist_split_verhaeltnis(faktor)
+    art = _ist_split_verhaeltnis(faktor, toleranz=0.05)
+    if art:
+        return f"Verhaeltnis {art}"
+    return f"Faktor {faktor:.3f} ohne glattes Verhaeltnis"
 
 
 def altlasten_reparieren(conn: sqlite3.Connection, min_kurs: float = 1.0,
@@ -131,6 +143,10 @@ def altlasten_reparieren(conn: sqlite3.Connection, min_kurs: float = 1.0,
 
     print(f"  {len(kandidaten)} Titel mit auffaelligem Sprung — pruefe "
           f"Verhaeltnisse …", flush=True)
+    # Seit 30.10.2026 wird JEDER Kandidat neu geladen, nicht nur glatte
+    # Split-Verhaeltnisse (Begruendung in verdaechtiger_sprung: Neuladen
+    # ist idempotent, der Filter hat krumme Kapitalmassnahmen stehen
+    # lassen). Das Verhaeltnis bleibt als Log-Begruendung.
     betroffen = []
     for (sym,) in kandidaten:
         reihe = conn.execute(
@@ -139,10 +155,13 @@ def altlasten_reparieren(conn: sqlite3.Connection, min_kurs: float = 1.0,
         for (d1, c1), (d2, c2) in zip(reihe, reihe[1:]):
             if not c1 or not c2 or c1 <= min_kurs * 5:
                 continue
-            art = _ist_split_verhaeltnis(c2 / c1)
-            if art:
-                betroffen.append((sym, d2, art))
-                break
+            faktor = c2 / c1
+            if 0.625 < faktor < 1.6:
+                continue
+            art = (_ist_split_verhaeltnis(faktor, toleranz=0.05)
+                   or f"Faktor {faktor:.3f}")
+            betroffen.append((sym, d2, art))
+            break
 
     if probe:
         betroffen = betroffen[:probe]
@@ -212,9 +231,9 @@ def main() -> int:
                 grund = ("Split gemeldet" if split_im_zeitraum(data)
                          else None)
                 if grund is None:
-                    verhaeltnis = verdaechtiger_sprung(conn, symbol, data)
-                    if verhaeltnis:
-                        grund = f"Kurssprung im Verhaeltnis {verhaeltnis}"
+                    sprung = verdaechtiger_sprung(conn, symbol, data)
+                    if sprung:
+                        grund = f"Kurssprung, {sprung}"
                 if grund:
                     # Anhaengen wuerde den Sprung festschreiben -- also die
                     # ganze Reihe neu, auf einheitlichem Massstab.
