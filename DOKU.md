@@ -244,14 +244,27 @@ Startpunkt aus dem letzten Eintrag und darf von dieser Seite nichts merken.
 | adj_close | REAL | Bereinigter Schlusskurs, Basis für MA, Crossover und Prognose |
 | volume | INTEGER | Handelsvolumen |
 
-**Bereinigung:** Abgerufen wird mit `yf.Ticker().history()` ohne
-`auto_adjust=False`. Yahoo liefert damit Kurse, die rückwirkend um Splits und
-Dividenden bereinigt sind, auch Open, High und Low. Seit 15.02.2025 setzt
-`save_to_db` `adj_close = close`. In älteren Zeilen aus der früheren
-Abrufart ist `close` nur um Splits bereinigt und `adj_close` zusätzlich um
-Dividenden. **Einen unbereinigten Schlusskurs enthält die Tabelle nicht.**
-Wer ihn braucht, etwa für Stichtagswerte oder Optionsstrikes, lädt mit
-`auto_adjust=False` nach (wie in `put_screener.py`).
+**Bereinigung — hängt vom Speicherdatum der Zeile ab:**
+
+| Zeilen gespeichert | `close` | `adj_close` |
+|---|---|---|
+| bis 2024 (frühere Abrufart) | nur um Splits bereinigt | um Splits und Dividenden bereinigt |
+| ab 2025 (seit 15.02.2025) | voll bereinigt (Splits + Dividenden) | = `close` |
+
+Abgerufen wird mit `yf.Ticker().history()` ohne `auto_adjust=False`; Yahoo
+liefert damit bereinigte Kurse, auch für Open, High und Low. `save_to_db`
+setzt seit 15.02.2025 `adj_close = close`. **Einen unbereinigten
+Schlusskurs enthält die Tabelle nicht.** Wer ihn braucht, etwa für
+Stichtagswerte oder Optionsstrikes, lädt mit `auto_adjust=False` nach (wie
+in `put_screener.py`).
+
+„Voll bereinigt" gilt zum Zeitpunkt des Abrufs: Gespeicherte Zeilen werden
+nie überschrieben (`INSERT OR IGNORE`). Splits wendet die Tabelle deshalb
+nicht von selbst rückwirkend an — ein Split nach dem Erstimport ergäbe einen
+Kurssprung. Dagegen lädt der Nachtlauf (`cron_update.py`) einen Titel
+komplett neu, wenn Yahoo im geholten Fenster einen Split meldet oder der
+erste neue Kurs mehr als 35 % vom letzten gespeicherten abweicht. Ein
+monatlicher Scan (`--reparieren`) sucht Sprünge mitten in der Reihe.
 
 ### Tabelle `company_info`
 Enthält alle Fundamental-Felder, die über `yfinance` bezogen werden, u. a.:
