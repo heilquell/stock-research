@@ -237,7 +237,21 @@ Startpunkt aus dem letzten Eintrag und darf von dieser Seite nichts merken.
 |---|---|---|
 | symbol | TEXT | Ticker-Symbol |
 | date | TEXT | Handelsdatum |
-| adj_close | REAL | Bereinigter Schlusskurs |
+| open | REAL | Eröffnungskurs (bereinigt) |
+| high | REAL | Tageshoch (bereinigt) |
+| low | REAL | Tagestief (bereinigt) |
+| close | REAL | Schlusskurs — **ebenfalls bereinigt**, kein echter Tagesschluss |
+| adj_close | REAL | Bereinigter Schlusskurs, Basis für MA, Crossover und Prognose |
+| volume | INTEGER | Handelsvolumen |
+
+**Bereinigung:** Abgerufen wird mit `yf.Ticker().history()` ohne
+`auto_adjust=False`. Yahoo liefert damit Kurse, die rückwirkend um Splits und
+Dividenden bereinigt sind, auch Open, High und Low. Seit 15.02.2025 setzt
+`save_to_db` `adj_close = close`. In älteren Zeilen aus der früheren
+Abrufart ist `close` nur um Splits bereinigt und `adj_close` zusätzlich um
+Dividenden. **Einen unbereinigten Schlusskurs enthält die Tabelle nicht.**
+Wer ihn braucht, etwa für Stichtagswerte oder Optionsstrikes, lädt mit
+`auto_adjust=False` nach (wie in `put_screener.py`).
 
 ### Tabelle `company_info`
 Enthält alle Fundamental-Felder, die über `yfinance` bezogen werden, u. a.:
