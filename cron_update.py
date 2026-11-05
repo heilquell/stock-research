@@ -119,17 +119,42 @@ def verdaechtiger_sprung(conn: sqlite3.Connection, symbol: str, data):
     return f"Faktor {faktor:.3f} ohne glattes Verhaeltnis"
 
 
+def yahoo_glatt(symbol: str, tag: str) -> bool | None:
+    """Ist die frische Yahoo-Reihe rund um ``tag`` ohne Sprung?
+
+    True  -> der Sprung steht nur bei uns (Anhaeng-Artefakt), Neuladen heilt.
+    False -> Yahoo hat ihn selbst (echte Bewegung oder Yahoo-Datenfehler);
+             Neuladen waere wirkungslos und wird uebersprungen. Ohne diese
+             Pruefung lud der Monats-Scan dieselben Titel jeden Monat neu.
+    None  -> Yahoo liefert fuer das Fenster nichts (delisted o. ae.).
+    """
+    t = datetime.strptime(tag[:10], "%Y-%m-%d").date()
+    try:
+        h = get_stock_data(symbol, t - timedelta(days=7), t + timedelta(days=4))
+    except Exception:
+        return None
+    if h is None or h.empty or len(h) < 2:
+        return None
+    cl = [float(x) for x in h["Close"].tolist()]
+    return max(abs(b / a - 1) for a, b in zip(cl, cl[1:]) if a) < SPLIT_SCHWELLE
+
+
 def altlasten_reparieren(conn: sqlite3.Connection, min_kurs: float = 1.0,
                          probe: int | None = None) -> dict:
-    """Einmalig: Titel finden, deren Reihe bereits einen Split-Sprung enthaelt.
+    """Monatlich: Titel finden, deren Reihe mitten drin einen Sprung enthaelt.
 
-    Die Erkennung oben verhindert neue Faelle. Die alten stehen weiterhin in
-    der Tabelle -- der Sprung liegt ja mitten in der Reihe, nicht am Rand.
-    Diese Funktion sucht sie und laedt die Betroffenen einmal komplett neu.
+    Die Erkennung im Nachtlauf verhindert neue Faelle am Reihen-Ende. Was
+    trotzdem mitten in der Reihe steht, sucht diese Funktion und laedt den
+    Titel komplett neu -- aber nur, wenn die frische Yahoo-Reihe an der
+    Stelle glatt ist (``yahoo_glatt``).
 
-    ``min_kurs`` haelt Pennystocks draussen: Bei Kursen um 0,004 ist jedes
-    Verhaeltnis zufaellig nahe an 2:1, und die Titel interessieren hier
-    niemanden.
+    Seit 05.11.2026 dieselbe Schwelle wie der Nachtlauf (SPLIT_SCHWELLE,
+    35 %) statt Faktor 1,6/0,625, und ``min_kurs`` gilt fuer den HOEHEREN
+    der beiden Kurse statt fuer den Vortag (vorher: Vortag > 5 $). Der alte
+    Filter liess durch: umgekehrte Splits bei kleinen Kursen (TZA 4,04 ->
+    39,90; FUBO 1,10 -> 12,02; KAPA 0,24 -> 1,65) und RUSHA 3:2 (Faktor
+    0,634, knapp ueber 0,625). Unter 1 $ bleibt es draussen: dort ist jede
+    Bewegung Rundungsrauschen (AFIB bei 0,0001).
     """
     kandidaten = conn.execute(
         """WITH x AS (
@@ -137,46 +162,41 @@ def altlasten_reparieren(conn: sqlite3.Connection, min_kurs: float = 1.0,
                       LAG(close) OVER (PARTITION BY symbol ORDER BY date) AS vor
                FROM stock_data
            )
-           SELECT DISTINCT symbol FROM x
-            WHERE vor > ? AND close > ? AND (close/vor > 1.6 OR close/vor < 0.625)
-            ORDER BY symbol""", (min_kurs * 5, min_kurs)).fetchall()
+           SELECT symbol, date FROM x
+            WHERE vor > 0 AND close > 0 AND MAX(vor, close) >= ?
+              AND ABS(close / vor - 1) > ?
+            ORDER BY symbol, date""", (min_kurs, SPLIT_SCHWELLE)).fetchall()
+    je_titel: dict[str, list[str]] = {}
+    for sym, tag in kandidaten:
+        je_titel.setdefault(sym, []).append(tag)
 
-    print(f"  {len(kandidaten)} Titel mit auffaelligem Sprung — pruefe "
-          f"Verhaeltnisse …", flush=True)
-    # Seit 30.10.2026 wird JEDER Kandidat neu geladen, nicht nur glatte
-    # Split-Verhaeltnisse (Begruendung in verdaechtiger_sprung: Neuladen
-    # ist idempotent, der Filter hat krumme Kapitalmassnahmen stehen
-    # lassen). Das Verhaeltnis bleibt als Log-Begruendung.
-    betroffen = []
-    for (sym,) in kandidaten:
-        reihe = conn.execute(
-            "SELECT date, close FROM stock_data WHERE symbol = ? ORDER BY date",
-            (sym,)).fetchall()
-        for (d1, c1), (d2, c2) in zip(reihe, reihe[1:]):
-            if not c1 or not c2 or c1 <= min_kurs * 5:
-                continue
-            faktor = c2 / c1
-            if 0.625 < faktor < 1.6:
-                continue
-            art = (_ist_split_verhaeltnis(faktor, toleranz=0.05)
-                   or f"Faktor {faktor:.3f}")
-            betroffen.append((sym, d2, art))
-            break
+    print(f"  {len(kandidaten)} Spruenge in {len(je_titel)} Titeln — "
+          f"pruefe gegen Yahoo …", flush=True)
+    betroffen, bei_yahoo = [], 0
+    for sym, tage in je_titel.items():
+        for tag in tage:
+            glatt = yahoo_glatt(sym, tag)
+            sleep(0.2)
+            if glatt:
+                betroffen.append((sym, tag))
+                break
+        else:
+            bei_yahoo += 1
 
     if probe:
         betroffen = betroffen[:probe]
     geladen = 0
-    for sym, tag, art in betroffen:
+    for sym, tag in betroffen:
         try:
             zeilen = voll_neu_laden(conn, sym)
             geladen += 1
-            print(f"  {sym:6s} Sprung {tag} ({art}) — {zeilen} Zeilen neu",
-                  flush=True)
+            print(f"  {sym:6s} Sprung {tag} — {zeilen} Zeilen neu", flush=True)
         except Exception as exc:
             print(f"  {sym:6s} FEHLER: {type(exc).__name__}: {exc}",
                   file=sys.stderr, flush=True)
         sleep(0.4)
-    return {"gefunden": len(betroffen), "neu_geladen": geladen}
+    return {"gefunden": len(betroffen), "neu_geladen": geladen,
+            "sprung_auch_bei_yahoo": bei_yahoo}
 
 
 def main() -> int:
